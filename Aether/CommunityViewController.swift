@@ -9,6 +9,8 @@ enum CommunityPage: Equatable {
     case addServer
     case serverChannels
     case settings
+    case ownerTools
+    case ownerServerMembers
 }
 
 final class CommunityViewController: UIViewController, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
@@ -60,6 +62,8 @@ final class CommunityViewController: UIViewController, UIImagePickerControllerDe
         case .addServer: return AetherLanguage.string("Create a Server")
         case .serverChannels: return server?.name ?? AetherLanguage.string("Channels")
         case .settings: return AetherLanguage.string("Account Settings")
+        case .ownerTools: return AetherLanguage.string("Owner Tools")
+        case .ownerServerMembers: return server?.name ?? AetherLanguage.string("Server Members")
         }
     }
 
@@ -108,6 +112,10 @@ final class CommunityViewController: UIViewController, UIImagePickerControllerDe
             loadServerChannels()
         case .settings:
             loadSettings()
+        case .ownerTools:
+            loadOwnerTools()
+        case .ownerServerMembers:
+            loadOwnerServerMembers()
         }
     }
 
@@ -427,17 +435,259 @@ final class CommunityViewController: UIViewController, UIImagePickerControllerDe
             symbol: "server.rack",
             action: { [weak self] in self?.push(.servers) }
         )
+        if user.isOwner {
+            addRow(
+                title: AetherLanguage.string("Owner Tools"),
+                subtitle: AetherLanguage.string("Manage accounts, test users, and server members."),
+                symbol: "checkmark.shield.fill",
+                action: { [weak self] in self?.push(.ownerTools) }
+            )
+        }
         addRow(
             title: AetherLanguage.string("Sign out"),
             symbol: "rectangle.portrait.and.arrow.right",
             action: signOut
         )
+        if !user.isOwner {
+            addRow(
+                title: AetherLanguage.string("Delete account"),
+                subtitle: AetherLanguage.string("Permanently delete your account and messages."),
+                symbol: "trash",
+                action: confirmDeleteAccount
+            )
+        }
+    }
+
+    private func loadOwnerTools() {
+        guard user.isOwner else {
+            addError(ChatAPIError.server(AetherLanguage.string("Owner access is required.")))
+            return
+        }
+        addHeading(AetherLanguage.string("Accounts"))
         addRow(
-            title: AetherLanguage.string("Delete account"),
-            subtitle: AetherLanguage.string("Permanently delete your account and messages."),
-            symbol: "trash",
-            action: confirmDeleteAccount
+            title: AetherLanguage.string("Create a test account"),
+            subtitle: AetherLanguage.string("Add a non-owner account for testing the app."),
+            symbol: "person.badge.plus",
+            action: promptCreateTestAccount
         )
+        addRow(
+            title: AetherLanguage.string("Find and ban a user"),
+            subtitle: AetherLanguage.string("Search accounts and ban or restore access."),
+            symbol: "person.crop.circle.badge.xmark",
+            action: promptOwnerUserSearch
+        )
+        addHeading(AetherLanguage.string("Server moderation"))
+        ChatService.shared.servers(token: token) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let servers):
+                    if servers.isEmpty {
+                        self.addEmptyState(AetherLanguage.string("No servers are available to moderate."))
+                    }
+                    servers.forEach { server in
+                        self.addRow(
+                            title: server.name,
+                            subtitle: "\(server.memberCount) \(AetherLanguage.string("members"))",
+                            symbol: "person.3.fill",
+                            action: { [weak self] in self?.push(.ownerServerMembers, server: server) }
+                        )
+                    }
+                case .failure(let error):
+                    self.addError(error)
+                }
+            }
+        }
+    }
+
+    private func loadOwnerServerMembers() {
+        guard user.isOwner, let server else {
+            addError(ChatAPIError.server(AetherLanguage.string("Owner access is required.")))
+            return
+        }
+        ChatService.shared.serverMembers(serverID: server.id, token: token) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.resetRows()
+                switch result {
+                case .success(let members):
+                    if members.isEmpty {
+                        self.addEmptyState(AetherLanguage.string("This server has no members."))
+                    }
+                    members.forEach { member in
+                        let isServerOwner = member.role == "owner"
+                        self.addRow(
+                            title: member.user.username,
+                            subtitle: isServerOwner
+                                ? AetherLanguage.string("Server owner")
+                                : AetherLanguage.string("Tap to kick this member from the server."),
+                            symbol: isServerOwner ? "crown.fill" : "person.crop.circle",
+                            action: {
+                                guard !isServerOwner else { return }
+                                self.confirmKick(member.user, from: server)
+                            }
+                        )
+                    }
+                case .failure(let error):
+                    self.addError(error)
+                }
+            }
+        }
+    }
+
+    private func promptCreateTestAccount() {
+        let prompt = UIAlertController(
+            title: AetherLanguage.string("Create a test account"),
+            message: AetherLanguage.string("Use a unique username and password with at least 8 characters."),
+            preferredStyle: .alert
+        )
+        prompt.addTextField {
+            $0.placeholder = AetherLanguage.string("Username")
+            $0.autocapitalizationType = .none
+            $0.autocorrectionType = .no
+        }
+        prompt.addTextField {
+            $0.placeholder = AetherLanguage.string("Password")
+            $0.isSecureTextEntry = true
+        }
+        prompt.addAction(UIAlertAction(title: AetherLanguage.string("Cancel"), style: .cancel))
+        prompt.addAction(UIAlertAction(title: AetherLanguage.string("Create"), style: .default) { [weak self, weak prompt] _ in
+            guard let self else { return }
+            let fields = prompt?.textFields ?? []
+            let username = fields.first?.text ?? ""
+            let password = fields.count > 1 ? fields[1].text ?? "" : ""
+            ChatService.shared.createTestAccount(username: username, password: password, token: self.token) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let account):
+                        self.showNotice("\(AetherLanguage.string("Test account created")): \(account.username)")
+                    case .failure(let error):
+                        self.showNotice(error.localizedDescription)
+                    }
+                }
+            }
+        })
+        present(prompt, animated: true)
+    }
+
+    private func promptOwnerUserSearch() {
+        let prompt = UIAlertController(
+            title: AetherLanguage.string("Find a user"),
+            message: AetherLanguage.string("Enter at least two characters of their username."),
+            preferredStyle: .alert
+        )
+        prompt.addTextField {
+            $0.placeholder = AetherLanguage.string("Username")
+            $0.autocapitalizationType = .none
+            $0.autocorrectionType = .no
+        }
+        prompt.addAction(UIAlertAction(title: AetherLanguage.string("Cancel"), style: .cancel))
+        prompt.addAction(UIAlertAction(title: AetherLanguage.string("Search"), style: .default) { [weak self, weak prompt] _ in
+            guard let self else { return }
+            let query = prompt?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard query.count >= 2 else {
+                self.showNotice(AetherLanguage.string("Enter at least two characters."))
+                return
+            }
+            ChatService.shared.ownerUsers(query: query, token: self.token) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let users):
+                        self.showOwnerUsers(users)
+                    case .failure(let error):
+                        self.showNotice(error.localizedDescription)
+                    }
+                }
+            }
+        })
+        present(prompt, animated: true)
+    }
+
+    private func showOwnerUsers(_ users: [OwnerAccount]) {
+        guard !users.isEmpty else {
+            showNotice(AetherLanguage.string("No users found."))
+            return
+        }
+        let choices = UIAlertController(
+            title: AetherLanguage.string("Choose an account"),
+            message: AetherLanguage.string("Banning blocks sign-in and removes active chat sessions."),
+            preferredStyle: .actionSheet
+        )
+        users.forEach { account in
+            let status = account.isBanned
+                ? AetherLanguage.string("Banned")
+                : (account.isTestAccount ? AetherLanguage.string("Test account") : AetherLanguage.string("Active"))
+            choices.addAction(UIAlertAction(title: "\(account.username) · \(status)", style: .default) { [weak self] _ in
+                self?.confirmAccountModeration(account)
+            })
+        }
+        choices.addAction(UIAlertAction(title: AetherLanguage.string("Cancel"), style: .cancel))
+        present(choices, animated: true)
+    }
+
+    private func confirmAccountModeration(_ account: OwnerAccount) {
+        let isBanning = !account.isBanned
+        let confirmation = UIAlertController(
+            title: isBanning
+                ? AetherLanguage.string("Ban this account?")
+                : AetherLanguage.string("Restore this account?"),
+            message: isBanning
+                ? AetherLanguage.string("This immediately blocks sign-in and ends active chat sessions.")
+                : AetherLanguage.string("This allows the user to sign in again."),
+            preferredStyle: .alert
+        )
+        if isBanning {
+            confirmation.addTextField {
+                $0.placeholder = AetherLanguage.string("Reason (optional)")
+            }
+        }
+        confirmation.addAction(UIAlertAction(title: AetherLanguage.string("Cancel"), style: .cancel))
+        confirmation.addAction(UIAlertAction(
+            title: isBanning ? AetherLanguage.string("Ban") : AetherLanguage.string("Unban"),
+            style: .destructive
+        ) { [weak self, weak confirmation] _ in
+            guard let self else { return }
+            let reason = confirmation?.textFields?.first?.text ?? ""
+            ChatService.shared.setUserBanned(
+                userID: account.id,
+                banned: isBanning,
+                reason: reason,
+                token: self.token
+            ) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success:
+                        self.showNotice(AetherLanguage.string(isBanning ? "Account banned." : "Account unbanned."))
+                    case .failure(let error):
+                        self.showNotice(error.localizedDescription)
+                    }
+                }
+            }
+        })
+        present(confirmation, animated: true)
+    }
+
+    private func confirmKick(_ member: ChatUser, from server: AetherServer) {
+        let confirmation = UIAlertController(
+            title: AetherLanguage.string("Kick member?"),
+            message: "\(AetherLanguage.string("Remove")) \(member.username) \(AetherLanguage.string("from")) \(server.name)?",
+            preferredStyle: .alert
+        )
+        confirmation.addAction(UIAlertAction(title: AetherLanguage.string("Cancel"), style: .cancel))
+        confirmation.addAction(UIAlertAction(title: AetherLanguage.string("Kick"), style: .destructive) { [weak self] _ in
+            guard let self else { return }
+            ChatService.shared.kickServerMember(serverID: server.id, userID: member.id, token: self.token) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success:
+                        self.loadOwnerServerMembers()
+                    case .failure(let error):
+                        self.showNotice(error.localizedDescription)
+                    }
+                }
+            }
+        })
+        present(confirmation, animated: true)
     }
 
     private func addEmptyState(_ text: String) {
@@ -850,6 +1100,40 @@ enum AetherLanguage {
         "Create a Server": "Creează un server",
         "Channels": "Canale",
         "Account Settings": "Setări cont",
+        "Owner Tools": "Instrumente proprietar",
+        "Server Members": "Membrii serverului",
+        "Accounts": "Conturi",
+        "Create a test account": "Creează un cont de test",
+        "Add a non-owner account for testing the app.": "Adaugă un cont fără privilegii pentru a testa aplicația.",
+        "Use a unique username and password with at least 8 characters.": "Folosește un nume unic și o parolă de cel puțin 8 caractere.",
+        "Test account created": "Cont de test creat",
+        "Find and ban a user": "Găsește și blochează un utilizator",
+        "Search accounts and ban or restore access.": "Caută conturi și blochează sau restabilește accesul.",
+        "Find a user": "Găsește un utilizator",
+        "Choose an account": "Alege un cont",
+        "Banning blocks sign-in and removes active chat sessions.": "Blocarea împiedică autentificarea și închide sesiunile active.",
+        "Banned": "Blocat",
+        "Test account": "Cont de test",
+        "Active": "Activ",
+        "Ban this account?": "Blochezi acest cont?",
+        "Restore this account?": "Restabilești acest cont?",
+        "This immediately blocks sign-in and ends active chat sessions.": "Blochează imediat autentificarea și închide sesiunile active.",
+        "This allows the user to sign in again.": "Utilizatorul se poate autentifica din nou.",
+        "Reason (optional)": "Motiv (opțional)",
+        "Ban": "Blochează",
+        "Unban": "Deblochează",
+        "Account banned.": "Cont blocat.",
+        "Account unbanned.": "Cont deblocat.",
+        "Server moderation": "Moderarea serverelor",
+        "No servers are available to moderate.": "Nu există servere de moderat.",
+        "This server has no members.": "Acest server nu are membri.",
+        "Server owner": "Proprietarul serverului",
+        "Tap to kick this member from the server.": "Apasă pentru a elimina acest membru din server.",
+        "Kick member?": "Elimini membrul?",
+        "Remove": "Elimină",
+        "from": "din",
+        "Kick": "Elimină",
+        "Owner access is required.": "Este necesar accesul proprietarului.",
         "Message": "Mesaj",
         "Direct message": "Mesaj direct",
         "Aether home": "Acasă Aether",

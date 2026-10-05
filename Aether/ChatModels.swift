@@ -4,11 +4,26 @@ struct ChatUser: Codable {
     let id: Int64
     let username: String
     let avatar: String?
+    let isOwner: Bool
 
-    init(id: Int64, username: String, avatar: String? = nil) {
+    enum CodingKeys: String, CodingKey {
+        case id, username, avatar
+        case isOwner = "is_owner"
+    }
+
+    init(id: Int64, username: String, avatar: String? = nil, isOwner: Bool = false) {
         self.id = id
         self.username = username
         self.avatar = avatar
+        self.isOwner = isOwner
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(Int64.self, forKey: .id)
+        username = try values.decode(String.self, forKey: .username)
+        avatar = try values.decodeIfPresent(String.self, forKey: .avatar)
+        isOwner = try values.decodeIfPresent(Bool.self, forKey: .isOwner) ?? false
     }
 }
 
@@ -202,6 +217,52 @@ struct ServerCreateResponse: Decodable {
 
 struct DeleteAccountResponse: Decodable {
     let deleted: Bool
+}
+
+struct OwnerAccountsResponse: Decodable {
+    let users: [OwnerAccount]
+}
+
+struct OwnerAccount: Decodable {
+    let id: Int64
+    let username: String
+    let isBanned: Bool
+    let isTestAccount: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, username
+        case isBanned = "is_banned"
+        case isTestAccount = "is_test_account"
+    }
+}
+
+struct OwnerAccountResponse: Decodable {
+    let user: OwnerAccount
+}
+
+struct ServerMembersResponse: Decodable {
+    let members: [ServerMember]
+}
+
+struct KickMemberResponse: Decodable {
+    let kicked: Bool
+    let userID: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case kicked
+        case userID = "user_id"
+    }
+}
+
+struct ServerMember: Decodable {
+    let user: ChatUser
+    let role: String
+    let joinedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case user, role
+        case joinedAt = "joined_at"
+    }
 }
 
 struct APIErrorResponse: Decodable {

@@ -5,6 +5,7 @@ A Discord-inspired native group chat for iOS 13 and newer, with your seashell ar
 ## What's included
 
 - iOS 13+ Swift/UIKit app with sign-up, login, channels, message history, secure Keychain sessions, and live chat.
+- Owner tools for the reserved `DevErick` account: global account bans, server-member kicks, and test-account creation.
 - Neon Function API for password-hashed accounts, authenticated endpoints, rate limits, PostgreSQL-backed chat, and cross-isolate live updates.
 - Existing Neon project link for project `old-bonus-14476007`, branch `production`.
 - GitHub Actions workflow for API validation and unsigned TrollStore package builds on macOS 26.
@@ -74,6 +75,8 @@ WebSocket `/ws` also requires the bearer token in the `Authorization` header. It
 - `GET /api/servers` lists `{ "servers": [{ "id", "name", "description", "owner_id", "created_at", "member_count", "is_member" }] }`. Create one with `POST /api/servers` and `{ "name": "…", "description": "…" }` (returns `{ "server": {...}, "channels": [{ "id", "server_id", "name", "description", "position" }] }` and creates a `general` channel); inspect with `GET /api/servers/:serverId` (`{ "server": {...} }`), join with `POST /api/servers/:serverId/join` (`{ "server_id": "…", "joined": true }`), and leave with `DELETE /api/servers/:serverId/membership` (`{ "server_id": "…", "left": true }`). The owner can delete the server with `DELETE /api/servers/:serverId`. `GET /api/servers/:serverId/channels` returns `{ "channels": [...] }` only to members. Channel message routes use the existing format and enforce membership for server channels; the legacy `/api/channels` remains scoped to the seeded community channels.
 - `PUT /api/me/avatar` accepts `{ "avatar": "data:image/png;base64,…" }`; PNG, JPEG, GIF, and WebP are accepted up to 1 MiB decoded. Set `avatar` to `null` to remove it. The base64 data is stored in Postgres and returned as `user.avatar`; no external image service is used.
 - `DELETE /api/me` returns `{ "deleted": true }`. Foreign-key cascades remove the account's messages, friendships/requests, direct conversations/messages, memberships, rate-limit row, and owned servers and their channels/messages.
+- Owner-only moderation endpoints are available only to the existing, reserved `DevErick` account. `GET /api/owner/users?query=<prefix>` searches accounts; `POST /api/owner/users/:userId/ban` accepts an optional `{ "reason": "..." }`, while `DELETE` on that route restores access. A ban blocks login and authenticated requests and closes active chat sockets. `POST /api/owner/test-accounts` accepts `{ "username": "...", "password": "..." }` and creates an ordinary, non-owner account marked for testing. `GET /api/owner/servers/:serverId/members` lists members; `DELETE /api/owner/servers/:serverId/members/:userId` kicks a member without allowing server owners to be kicked.
+- The `DevErick` username is reserved from public registration and its account cannot be deleted or banned, so owner permissions cannot be claimed by registering that handle later. Existing databases are upgraded automatically when the API starts.
 
 Messages remain limited to 2,000 characters and 100 per page. Existing auth and community-channel response formats are retained, with `avatar` added to user objects returned by `/api/me`, register, and login.
 

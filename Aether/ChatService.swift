@@ -286,6 +286,75 @@ final class ChatService {
         }
     }
 
+    func ownerUsers(
+        query: String,
+        token: String,
+        completion: @escaping (Result<[OwnerAccount], Error>) -> Void
+    ) {
+        get(queryPath("/api/owner/users", items: [URLQueryItem(name: "query", value: query)]), token: token) {
+            (result: Result<OwnerAccountsResponse, Error>) in completion(result.map(\.users))
+        }
+    }
+
+    func setUserBanned(
+        userID: Int64,
+        banned: Bool,
+        reason: String = "",
+        token: String,
+        completion: @escaping (Result<OwnerAccount, Error>) -> Void
+    ) {
+        request(
+            path: "/api/owner/users/\(userID)/ban",
+            method: banned ? "POST" : "DELETE",
+            token: token,
+            body: banned ? ["reason": reason] : nil
+        ) { (result: Result<OwnerAccountResponse, Error>) in
+            completion(result.map(\.user))
+        }
+    }
+
+    func createTestAccount(
+        username: String,
+        password: String,
+        token: String,
+        completion: @escaping (Result<OwnerAccount, Error>) -> Void
+    ) {
+        request(
+            path: "/api/owner/test-accounts",
+            method: "POST",
+            token: token,
+            body: ["username": username, "password": password]
+        ) { (result: Result<OwnerAccountResponse, Error>) in
+            completion(result.map(\.user))
+        }
+    }
+
+    func serverMembers(
+        serverID: Int64,
+        token: String,
+        completion: @escaping (Result<[ServerMember], Error>) -> Void
+    ) {
+        get("/api/owner/servers/\(serverID)/members", token: token) {
+            (result: Result<ServerMembersResponse, Error>) in completion(result.map(\.members))
+        }
+    }
+
+    func kickServerMember(
+        serverID: Int64,
+        userID: Int64,
+        token: String,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        request(
+            path: "/api/owner/servers/\(serverID)/members/\(userID)",
+            method: "DELETE",
+            token: token,
+            body: Optional<[String: String]>.none
+        ) { (result: Result<KickMemberResponse, Error>) in
+            completion(result.map { _ in () })
+        }
+    }
+
     private func get<Response: Decodable>(
         _ path: String,
         token: String,

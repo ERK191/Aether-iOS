@@ -15,8 +15,8 @@ import {
 } from "../server/validation.mjs";
 import { canReceiveRealtimeEvent, type RealtimeAudience } from "../server/realtime.mjs";
 
-type PublicUser = { id: string; username: string; avatar?: string | null };
-type AuthUser = { id: string; username: string };
+type PublicUser = { id: string; username: string; avatar?: string | null; is_owner: boolean };
+type AuthUser = { id: string; username: string; isOwner: boolean };
 type Variables = { user: AuthUser };
 type AppEnvironment = { Variables: Variables };
 type SocketEvent = {
@@ -71,8 +71,18 @@ function avatarDetails(value: unknown): ValidAvatar | null {
   return "error" in result ? null : result;
 }
 
-function publicUser(row: { id: string | number; username: string; avatar_data?: string | null }): PublicUser {
-  return { id: String(row.id), username: row.username, avatar: row.avatar_data ?? null };
+function publicUser(row: {
+  id: string | number;
+  username: string;
+  avatar_data?: string | null;
+  is_owner?: boolean;
+}): PublicUser {
+  return {
+    id: String(row.id),
+    username: row.username,
+    avatar: row.avatar_data ?? null,
+    is_owner: row.is_owner ?? false
+  };
 }
 
 function signToken(user: PublicUser): string {
@@ -100,6 +110,9 @@ async function ensureSchema(): Promise<void> {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
       ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS ban_reason TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS is_test_account BOOLEAN NOT NULL DEFAULT FALSE;
       CREATE TABLE IF NOT EXISTS servers (
         id BIGSERIAL PRIMARY KEY,
         name VARCHAR(64) NOT NULL,
@@ -223,9 +236,18 @@ const requireAuth: MiddlewareHandler<AppEnvironment> = async (context, next) => 
       return context.json({ error: "Your session is invalid. Sign in again." }, 401);
     }
     await ensureSchema();
-    const account = await pool.query("SELECT id, username FROM users WHERE id = $1", [payload.sub]);
+    const account = await pool.query(
+      `SELECT id, username, username_key, is_banned
+       FROM users WHERE id = $1`,
+      [payload.sub]
+    );
     if (!account.rows[0]) return context.json({ error: "Account no longer exists." }, 401);
-    context.set("user", { id: payload.sub, username: payload.username });
+    if (account.rows[0].is_banned) return context.json({ error: "This account has been banned." }, 403);
+    context.set("user", {
+      id: payload.sub,
+      username: account.rows[0].username,
+      isOwner: account.rows[0].username_key === "deverick"
+    });
     await next();
   } catch (error) {
     if (error instanceof jwt.TokenExpiredError || error instanceof jwt.JsonWebTokenError) {
@@ -234,6 +256,23 @@ const requireAuth: MiddlewareHandler<AppEnvironment> = async (context, next) => 
     throw error;
   }
 };
+
+const requireOwner: MiddlewareHandler<AppEnvironment> = async (context, next) => {
+  if (!context.get("user").isOwner) return jsonError("Only the Aether owner can use this feature.", 403);
+  await next();
+};
+
+function closeUserSockets(userId: string): void {
+  for (const [socket, connectedUserId] of sockets) {
+    if (connectedUserId !== userId) continue;
+    try {
+      socket.close(1008, "Account banned");
+    } catch (error) {
+      console.error("Could not close banned user's chat connection:", error);
+    }
+    releaseMessageFeed(socket);
+  }
+}
 
 function broadcast(event: SocketEvent, audience: RealtimeAudience): void {
   const payload = JSON.stringify(event);
@@ -254,6 +293,14 @@ async function pollMessages(): Promise<void> {
   if (feedPolling || sockets.size === 0) return;
   feedPolling = true;
   try {
+    const connectedUserIds = [...new Set(sockets.values())];
+    const bannedUsers = await pool.query(
+      "SELECT id FROM users WHERE is_banned = TRUE AND id = ANY($1::bigint[])",
+      [connectedUserIds]
+    );
+    for (const row of bannedUsers.rows) closeUserSockets(String(row.id));
+    if (sockets.size === 0) return;
+
     const result = await pool.query(
       `SELECT m.id, m.channel_id, m.user_id, u.username, u.avatar_data AS avatar, m.content, m.created_at,
               c.server_id, recipients.member_ids
@@ -336,6 +383,9 @@ app.post("/api/auth/register", async (context) => {
   if (!details) {
     return jsonError("Enter a valid username (3–24 letters, numbers, or underscores) and a password of 8–72 UTF-8 bytes.", 400);
   }
+  if (details.username.toLowerCase() === "deverick") {
+    return jsonError("The Aether owner username is reserved.", 409);
+  }
   if (!(await allowRate("auth_rate_limits", details.username.toLowerCase(), 5))) {
     return jsonError("Too many account attempts. Try again in a minute.", 429);
   }
@@ -374,12 +424,14 @@ app.post("/api/auth/login", async (context) => {
     return jsonError("Too many account attempts. Try again in a minute.", 429);
   }
   const result = await pool.query(
-    "SELECT id, username, password_hash FROM users WHERE username_key = $1",
+    "SELECT id, username, password_hash, username_key, is_banned FROM users WHERE username_key = $1",
     [details.username.toLowerCase()]
   );
   const row = result.rows[0];
   const matches = row ? await bcrypt.compare(details.password, row.password_hash) : false;
   if (!matches) return jsonError("Username or password is incorrect.", 401);
+  if (row.is_banned) return jsonError("This account has been banned.", 403);
+  row.is_owner = row.username_key === "deverick";
   const user = publicUser(row);
   return context.json({ token: signToken(user), user });
 });
@@ -387,7 +439,10 @@ app.post("/api/auth/login", async (context) => {
 app.get("/api/me", requireAuth, async (context) => {
   await ensureSchema();
   const currentUser = context.get("user");
-  const result = await pool.query("SELECT id, username, avatar_data FROM users WHERE id = $1", [currentUser.id]);
+  const result = await pool.query(
+    "SELECT id, username, avatar_data, username_key = 'deverick' AS is_owner FROM users WHERE id = $1",
+    [currentUser.id]
+  );
   if (!result.rows[0]) return jsonError("Account no longer exists.", 401);
   return context.json({ user: publicUser(result.rows[0]) });
 });
@@ -404,7 +459,8 @@ app.put("/api/me/avatar", requireAuth, async (context) => {
   if (!avatar) return jsonError("Avatar must be a PNG, JPEG, GIF, or WebP data URL no larger than 1 MiB.", 400);
   const user = context.get("user");
   const result = await pool.query(
-    "UPDATE users SET avatar_data = $2 WHERE id = $1 RETURNING id, username, avatar_data",
+    `UPDATE users SET avatar_data = $2 WHERE id = $1
+     RETURNING id, username, avatar_data, username_key = 'deverick' AS is_owner`,
     [user.id, avatar.avatar]
   );
   if (!result.rows[0]) return jsonError("Account no longer exists.", 401);
@@ -414,6 +470,7 @@ app.put("/api/me/avatar", requireAuth, async (context) => {
 app.delete("/api/me", requireAuth, async (context) => {
   await ensureSchema();
   const user = context.get("user");
+  if (user.isOwner) return jsonError("The Aether owner account cannot be deleted.", 403);
   const result = await pool.query(
     `WITH target AS (SELECT username_key FROM users WHERE id = $1),
      removed_limits AS (
@@ -425,6 +482,169 @@ app.delete("/api/me", requireAuth, async (context) => {
   );
   if (!result.rows[0]) return jsonError("Account no longer exists.", 401);
   return context.json({ deleted: true });
+});
+
+app.get("/api/owner/users", requireAuth, requireOwner, async (context) => {
+  await ensureSchema();
+  const query = (context.req.query("query") ?? "").trim();
+  if ([...query].length < 2 || [...query].length > 24) {
+    return jsonError("User search must contain 2–24 characters.", 400);
+  }
+  const owner = context.get("user");
+  const result = await pool.query(
+    `SELECT id, username, is_banned, is_test_account
+     FROM users
+     WHERE id <> $1 AND username_key LIKE $2
+     ORDER BY username_key LIMIT 50`,
+    [owner.id, `${query.toLowerCase().replace(/[\\%_]/g, "\\$&")}%`]
+  );
+  return context.json({
+    users: result.rows.map((row) => ({
+      id: String(row.id),
+      username: row.username,
+      is_banned: row.is_banned,
+      is_test_account: row.is_test_account
+    }))
+  });
+});
+
+app.post("/api/owner/users/:userId/ban", requireAuth, requireOwner, async (context) => {
+  await ensureSchema();
+  const targetId = parseId(context.req.param("userId"));
+  if (targetId === null) return jsonError("Invalid user.", 400);
+  let body: unknown = {};
+  try {
+    body = await context.req.json();
+  } catch {
+    return jsonError("Send valid JSON with an optional ban reason.", 400);
+  }
+  const source = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const reason = typeof source.reason === "string" ? source.reason.trim() : "";
+  if ([...reason].length > 200) return jsonError("Ban reasons must be at most 200 characters.", 400);
+  const owner = context.get("user");
+  const result = await pool.query(
+    `UPDATE users SET is_banned = TRUE, ban_reason = $3
+     WHERE id = $1 AND id <> $2 AND username_key <> 'deverick'
+     RETURNING id, username, is_banned, is_test_account`,
+    [targetId, owner.id, reason || null]
+  );
+  if (!result.rows[0]) return jsonError("User not found or the owner account cannot be banned.", 404);
+  closeUserSockets(String(result.rows[0].id));
+  const row = result.rows[0];
+  return context.json({
+    user: {
+      id: String(row.id),
+      username: row.username,
+      is_banned: row.is_banned,
+      is_test_account: row.is_test_account
+    }
+  });
+});
+
+app.delete("/api/owner/users/:userId/ban", requireAuth, requireOwner, async (context) => {
+  await ensureSchema();
+  const targetId = parseId(context.req.param("userId"));
+  if (targetId === null) return jsonError("Invalid user.", 400);
+  const owner = context.get("user");
+  const result = await pool.query(
+    `UPDATE users SET is_banned = FALSE, ban_reason = NULL
+     WHERE id = $1 AND id <> $2 AND username_key <> 'deverick'
+     RETURNING id, username, is_banned, is_test_account`,
+    [targetId, owner.id]
+  );
+  if (!result.rows[0]) return jsonError("User not found or the owner account cannot be changed.", 404);
+  const row = result.rows[0];
+  return context.json({
+    user: {
+      id: String(row.id),
+      username: row.username,
+      is_banned: row.is_banned,
+      is_test_account: row.is_test_account
+    }
+  });
+});
+
+app.post("/api/owner/test-accounts", requireAuth, requireOwner, async (context) => {
+  await ensureSchema();
+  let body: unknown;
+  try {
+    body = await context.req.json();
+  } catch {
+    return jsonError("Send valid JSON with a username and password.", 400);
+  }
+  const details = credentials(body);
+  if (!details) {
+    return jsonError("Enter a valid username (3–24 letters, numbers, or underscores) and a password of 8–72 UTF-8 bytes.", 400);
+  }
+  if (details.username.toLowerCase() === "deverick") {
+    return jsonError("The Aether owner username is reserved.", 409);
+  }
+  if (!(await allowRate("auth_rate_limits", details.username.toLowerCase(), 5))) {
+    return jsonError("Too many account attempts. Try again in a minute.", 429);
+  }
+  try {
+    const passwordHash = await bcrypt.hash(details.password, 12);
+    const result = await pool.query(
+      `INSERT INTO users (username, username_key, password_hash, is_test_account)
+       VALUES ($1, $2, $3, TRUE)
+       RETURNING id, username, is_banned, is_test_account`,
+      [details.username, details.username.toLowerCase(), passwordHash]
+    );
+    const row = result.rows[0];
+    return context.json({
+      user: {
+        id: String(row.id),
+        username: row.username,
+        is_banned: row.is_banned,
+        is_test_account: row.is_test_account
+      }
+    }, 201);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "23505") {
+      return jsonError("That username is already taken.", 409);
+    }
+    throw error;
+  }
+});
+
+app.get("/api/owner/servers/:serverId/members", requireAuth, requireOwner, async (context) => {
+  await ensureSchema();
+  const serverId = parseId(context.req.param("serverId"));
+  if (serverId === null) return jsonError("Invalid server.", 400);
+  const server = await pool.query("SELECT id FROM servers WHERE id = $1", [serverId]);
+  if (!server.rows[0]) return jsonError("Server not found.", 404);
+  const result = await pool.query(
+    `SELECT u.id, u.username, u.avatar_data, sm.role, sm.created_at
+     FROM server_memberships sm
+     JOIN users u ON u.id = sm.user_id
+     WHERE sm.server_id = $1
+     ORDER BY CASE WHEN sm.role = 'owner' THEN 0 ELSE 1 END, u.username_key`,
+    [serverId]
+  );
+  return context.json({
+    members: result.rows.map((row) => ({
+      user: publicUser(row),
+      role: row.role,
+      joined_at: row.created_at
+    }))
+  });
+});
+
+app.delete("/api/owner/servers/:serverId/members/:userId", requireAuth, requireOwner, async (context) => {
+  await ensureSchema();
+  const serverId = parseId(context.req.param("serverId"));
+  const targetId = parseId(context.req.param("userId"));
+  if (serverId === null || targetId === null) return jsonError("Invalid server or user.", 400);
+  const result = await pool.query(
+    `DELETE FROM server_memberships sm
+     USING servers s
+     WHERE sm.server_id = s.id AND sm.server_id = $1 AND sm.user_id = $2
+       AND sm.role <> 'owner'
+     RETURNING sm.user_id`,
+    [serverId, targetId]
+  );
+  if (!result.rows[0]) return jsonError("Member not found or server owners cannot be kicked.", 404);
+  return context.json({ kicked: true, user_id: String(result.rows[0].user_id) });
 });
 
 app.get("/api/users", requireAuth, async (context) => {

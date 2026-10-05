@@ -47,6 +47,8 @@ final class AuthViewController: UIViewController {
         subtitleLabel.textAlignment = .center
         subtitleLabel.numberOfLines = 2
 
+        usernameField.translatesAutoresizingMaskIntoConstraints = false
+        usernameField.font = .systemFont(ofSize: 16)
         usernameField.placeholder = "Username"
         usernameField.textColor = AetherTheme.text
         usernameField.autocapitalizationType = .none
@@ -60,6 +62,8 @@ final class AuthViewController: UIViewController {
         usernameField.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 16, height: 1))
         usernameField.leftViewMode = .always
 
+        passwordField.translatesAutoresizingMaskIntoConstraints = false
+        passwordField.font = .systemFont(ofSize: 16)
         passwordField.placeholder = "Password · 8 characters minimum"
         passwordField.textColor = AetherTheme.text
         passwordField.isSecureTextEntry = true

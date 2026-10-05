@@ -835,10 +835,6 @@ enum AetherLanguage {
         NotificationCenter.default.post(name: .aetherLanguageDidChange, object: nil)
     }
 
-    extension Notification.Name {
-        static let aetherLanguageDidChange = Notification.Name("AetherLanguageDidChange")
-    }
-
     static func string(_ english: String) -> String {
         guard UserDefaults.standard.string(forKey: languageKey) == "ro" else { return english }
         return romanian[english] ?? english
@@ -936,4 +932,8 @@ enum AetherLanguage {
         "Delete Account": "Șterge contul",
         "OK": "OK"
     ]
+}
+
+extension Notification.Name {
+    static let aetherLanguageDidChange = Notification.Name("AetherLanguageDidChange")
 }

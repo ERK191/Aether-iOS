@@ -644,27 +644,6 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
                         self.showNotice(error.localizedDescription)
                     }
                 }
-
-                private func refreshDirectMessages() {
-                    guard let directConversation else { return }
-                    ChatService.shared.directMessages(conversationID: directConversation.id, token: token) { [weak self] result in
-                        DispatchQueue.main.async {
-                            guard let self else { return }
-                            switch result {
-                            case .success(let messages): self.mergeDirectMessages(messages)
-                            case .failure(let error): self.showNotice(error.localizedDescription)
-                            }
-                        }
-                    }
-                }
-
-                private func mergeDirectMessages(_ fetched: [ChatMessage]) {
-                    let combined = Dictionary(
-                        (fetched + messages).map { ($0.id, $0) },
-                        uniquingKeysWith: { _, newer in newer }
-                    ).values.sorted { $0.id < $1.id }
-                    renderMessages(combined)
-                }
             }
             return
         }
@@ -687,6 +666,27 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
                 }
             }
         }
+    }
+
+    private func refreshDirectMessages() {
+        guard let directConversation else { return }
+        ChatService.shared.directMessages(conversationID: directConversation.id, token: token) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let messages): self.mergeDirectMessages(messages)
+                case .failure(let error): self.showNotice(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func mergeDirectMessages(_ fetched: [ChatMessage]) {
+        let combined = Dictionary(
+            (fetched + messages).map { ($0.id, $0) },
+            uniquingKeysWith: { _, newer in newer }
+        ).values.sorted { $0.id < $1.id }
+        renderMessages(combined)
     }
 
     private func renderMessages(_ items: [ChatMessage]) {

@@ -1,0 +1,62 @@
+name: Build Aether for TrollStore
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run server tests
+        run: npm test
+
+  build:
+    runs-on: macos-26
+    needs: backend-tests
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build unsigned iOS app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project Aether.xcodeproj \
+            -scheme Aether \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package app as TIPA
+        run: |
+          set -euo pipefail
+          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/Aether.app"
+          test -d "$APP_PATH"
+          mkdir -p "$RUNNER_TEMP/tipa/Payload"
+          ditto "$APP_PATH" "$RUNNER_TEMP/tipa/Payload/Aether.app"
+          cd "$RUNNER_TEMP/tipa"
+          zip -qry "$GITHUB_WORKSPACE/Aether.tipa" Payload
+          test -s "$GITHUB_WORKSPACE/Aether.tipa"
+
+      - name: Upload TIPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aether-TrollStore
+          path: Aether.tipa
+          if-no-files-found: error
+          retention-days: 14

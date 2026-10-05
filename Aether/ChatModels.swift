@@ -163,7 +163,7 @@ struct ServerChannelsResponse: Decodable {
 }
 
 struct FriendRequestResponse: Decodable {
-    let request: FriendRequestRecordRecord
+    let request: FriendRequestRecord
 }
 
 struct FriendRequestRecord: Decodable {

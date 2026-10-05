@@ -903,7 +903,6 @@ enum AetherLanguage {
         "People": "Persoane",
         "No users found.": "Nu s-au găsit utilizatori.",
         "Friend request sent.": "Cererea de prietenie a fost trimisă.",
-        "Message": "Mesaj",
         "Remove Friend": "Elimină prietenul",
         "Accept": "Acceptă",
         "Decline": "Refuză",

@@ -102,6 +102,205 @@ final class ChatService {
         }
     }
 
+    func users(
+        query: String,
+        token: String,
+        completion: @escaping (Result<[UserSearchResult], Error>) -> Void
+    ) {
+        get(queryPath("/api/users", items: [URLQueryItem(name: "query", value: query)]), token: token) {
+            (result: Result<UserSearchResponse, Error>) in completion(result.map(\.users))
+        }
+    }
+
+    func friends(token: String, completion: @escaping (Result<[FriendEntry], Error>) -> Void) {
+        get("/api/friends", token: token) { (result: Result<FriendsResponse, Error>) in
+            completion(result.map(\.friends))
+        }
+    }
+
+    func friendRequests(token: String, completion: @escaping (Result<[FriendRequest], Error>) -> Void) {
+        get("/api/friends/requests", token: token) { (result: Result<FriendRequestsResponse, Error>) in
+            completion(result.map(\.requests))
+        }
+    }
+
+    func sendFriendRequest(userID: Int64, token: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        request(path: "/api/friends/requests", method: "POST", token: token, body: ["user_id": String(userID)]) {
+            (result: Result<FriendRequestResponse, Error>) in
+            completion(result.map { _ in () })
+        }
+    }
+
+    func respondToFriendRequest(
+        requestID: Int64,
+        accept: Bool,
+        token: String,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        let action = accept ? "accept" : "reject"
+        request(
+            path: "/api/friends/requests/\(requestID)/\(action)",
+            method: "POST",
+            token: token,
+            body: Optional<[String: String]>.none
+        ) { (result: Result<FriendRequestResponse, Error>) in
+            completion(result.map { _ in () })
+        }
+    }
+
+    func removeFriend(userID: Int64, token: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        request(
+            path: "/api/friends/\(userID)",
+            method: "DELETE",
+            token: token,
+            body: Optional<[String: String]>.none
+        ) { (result: Result<RemovedResponse, Error>) in
+            completion(result.map { _ in () })
+        }
+    }
+
+    func conversations(token: String, completion: @escaping (Result<[DirectConversation], Error>) -> Void) {
+        get("/api/conversations", token: token) {
+            (result: Result<ConversationsResponse, Error>) in completion(result.map(\.conversations))
+        }
+    }
+
+    func createConversation(
+        userID: Int64,
+        token: String,
+        completion: @escaping (Result<ConversationRecord, Error>) -> Void
+    ) {
+        request(
+            path: "/api/conversations",
+            method: "POST",
+            token: token,
+            body: ["user_id": String(userID)]
+        ) { (result: Result<ConversationResponse, Error>) in
+            completion(result.map(\.conversation))
+        }
+    }
+
+    func directMessages(
+        conversationID: Int64,
+        token: String,
+        completion: @escaping (Result<[ChatMessage], Error>) -> Void
+    ) {
+        get("/api/conversations/\(conversationID)/messages?limit=50", token: token) {
+            (result: Result<MessagesResponse, Error>) in completion(result.map(\.messages))
+        }
+    }
+
+    func sendDirectMessage(
+        content: String,
+        conversationID: Int64,
+        token: String,
+        completion: @escaping (Result<ChatMessage, Error>) -> Void
+    ) {
+        request(
+            path: "/api/conversations/\(conversationID)/messages",
+            method: "POST",
+            token: token,
+            body: ["content": content]
+        ) { (result: Result<MessageResponse, Error>) in
+            completion(result.map(\.message))
+        }
+    }
+
+    func servers(token: String, completion: @escaping (Result<[AetherServer], Error>) -> Void) {
+        get("/api/servers", token: token) { (result: Result<ServersResponse, Error>) in
+            completion(result.map(\.servers))
+        }
+    }
+
+    func createServer(
+        name: String,
+        description: String,
+        token: String,
+        completion: @escaping (Result<ServerCreateResponse, Error>) -> Void
+    ) {
+        request(
+            path: "/api/servers",
+            method: "POST",
+            token: token,
+            body: ["name": name, "description": description]
+        ) { completion($0) }
+    }
+
+    func joinServer(serverID: Int64, token: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        request(
+            path: "/api/servers/\(serverID)/join",
+            method: "POST",
+            token: token,
+            body: Optional<[String: String]>.none
+        ) { (result: Result<JoinedServerResponse, Error>) in
+            completion(result.map { _ in () })
+        }
+    }
+
+    func leaveServer(serverID: Int64, token: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        request(
+            path: "/api/servers/\(serverID)/membership",
+            method: "DELETE",
+            token: token,
+            body: Optional<[String: String]>.none
+        ) { (result: Result<JoinedServerResponse, Error>) in
+            completion(result.map { _ in () })
+        }
+    }
+
+    func deleteServer(serverID: Int64, token: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        request(
+            path: "/api/servers/\(serverID)",
+            method: "DELETE",
+            token: token,
+            body: Optional<[String: String]>.none
+        ) { (result: Result<DeleteAccountResponse, Error>) in
+            completion(result.map { _ in () })
+        }
+    }
+
+    func serverChannels(serverID: Int64, token: String, completion: @escaping (Result<[Channel], Error>) -> Void) {
+        get("/api/servers/\(serverID)/channels", token: token) {
+            (result: Result<ServerChannelsResponse, Error>) in completion(result.map(\.channels))
+        }
+    }
+
+    func updateAvatar(
+        dataURL: String?,
+        token: String,
+        completion: @escaping (Result<ChatUser, Error>) -> Void
+    ) {
+        request(path: "/api/me/avatar", method: "PUT", token: token, body: AvatarBody(avatar: dataURL)) {
+            (result: Result<UserResponse, Error>) in completion(result.map(\.user))
+        }
+    }
+
+    func deleteAccount(token: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        request(
+            path: "/api/me",
+            method: "DELETE",
+            token: token,
+            body: Optional<[String: String]>.none
+        ) { (result: Result<DeleteAccountResponse, Error>) in
+            completion(result.map { _ in () })
+        }
+    }
+
+    private func get<Response: Decodable>(
+        _ path: String,
+        token: String,
+        completion: @escaping (Result<Response, Error>) -> Void
+    ) {
+        request(path: path, method: "GET", token: token, body: Optional<[String: String]>.none, completion: completion)
+    }
+
+    private func queryPath(_ path: String, items: [URLQueryItem]) -> String {
+        var components = URLComponents()
+        components.path = path
+        components.queryItems = items
+        return components.string ?? path
+    }
+
     private func request<Response: Decodable, Body: Encodable>(
         path: String,
         method: String,
@@ -321,6 +520,38 @@ final class ChatService {
         socketLock.unlock()
         oldSocket?.cancel(with: .goingAway, reason: nil)
         oldSession?.invalidateAndCancel()
+    }
+}
+
+private struct AvatarBody: Encodable {
+    let avatar: String?
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let avatar {
+            try container.encode(avatar, forKey: .avatar)
+        } else {
+            try container.encodeNil(forKey: .avatar)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case avatar
+    }
+}
+
+private struct RemovedResponse: Decodable {
+    let removed: Bool
+}
+
+private struct JoinedServerResponse: Decodable {
+    let serverID: Int64
+    let joined: Bool?
+    let left: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case serverID = "server_id"
+        case joined, left
     }
 }
 

@@ -1,15 +1,24 @@
 import UIKit
 
 final class ChatViewController: UIViewController, UITextViewDelegate {
-    private let user: ChatUser
+    private var user: ChatUser
     private let token: String
+    private let directConversation: DirectConversation?
+    private let serverChannel: Channel?
     private var channels: [Channel] = []
     private var selectedChannel: Channel?
     private var messages: [ChatMessage] = []
 
+    private let leftRail = UIView()
+    private let railStack = UIStackView()
+    private var railServers: [AetherServer] = []
+    private var railServerButtons: [UIButton] = []
     private let header = UIView()
     private let channelStrip = UIStackView()
     private let serverStatus = UIView()
+    private let serverNameLabel = UILabel()
+    private let memberLineLabel = UILabel()
+    private var accountButton: UIButton?
     private let channelTitle = UILabel()
     private let channelSubtitle = UILabel()
     private let messageScroll = UIScrollView()
@@ -20,11 +29,75 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
     private let activity = UIActivityIndicatorView(style: .medium)
     private let emptyLabel = UILabel()
     private var composerBottomConstraint: NSLayoutConstraint?
+    private var channelStripHeightConstraint: NSLayoutConstraint?
+    private var directRefreshTimer: Timer?
 
-    init(user: ChatUser, token: String) {
+    init(
+        user: ChatUser,
+        token: String,
+        directConversation: DirectConversation? = nil,
+        serverChannel: Channel? = nil
+    ) {
         self.user = user
         self.token = token
+        self.directConversation = directConversation
+        self.serverChannel = serverChannel
         super.init(nibName: nil, bundle: nil)
+    }
+
+    @objc private func showServers() {
+        let page = CommunityViewController(page: .servers, user: user, token: token)
+        navigationController?.pushViewController(page, animated: true)
+    }
+
+    @objc private func openRailServer(_ sender: UIButton) {
+        guard railServers.indices.contains(sender.tag) else { return }
+        let page = CommunityViewController(
+            page: .serverChannels,
+            user: user,
+            token: token,
+            server: railServers[sender.tag]
+        )
+        navigationController?.pushViewController(page, animated: true)
+    }
+
+    private func loadRailServers() {
+        ChatService.shared.servers(token: token) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let servers: [AetherServer]
+                switch result {
+                case .success(let value):
+                    servers = value
+                case .failure(let error):
+                    self.showNotice(error.localizedDescription)
+                    return
+                }
+                self.railServers = Array(servers.filter(\.isMember).prefix(3))
+                self.railServerButtons.forEach {
+                    self.railStack.removeArrangedSubview($0)
+                    $0.removeFromSuperview()
+                }
+                self.railServerButtons = self.railServers.enumerated().map { index, server in
+                    let button = UIButton(type: .system)
+                    button.translatesAutoresizingMaskIntoConstraints = false
+                    button.setTitle(String(server.name.prefix(1)).uppercased(), for: .normal)
+                    button.setTitleColor(.white, for: .normal)
+                    button.titleLabel?.font = .systemFont(ofSize: 17, weight: .bold)
+                    button.backgroundColor = AetherTheme.elevated
+                    button.layer.cornerRadius = 17
+                    button.tag = index
+                    button.accessibilityLabel = server.name
+                    button.addTarget(self, action: #selector(self.openRailServer(_:)), for: .touchUpInside)
+                    NSLayoutConstraint.activate([
+                        button.widthAnchor.constraint(equalToConstant: 46),
+                        button.heightAnchor.constraint(equalToConstant: 46)
+                    ])
+                    self.railStack.insertArrangedSubview(button, at: min(3 + index, self.railStack.arrangedSubviews.count))
+                    return button
+                }
+            }
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -35,35 +108,254 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         super.viewDidLoad()
         view.backgroundColor = AetherTheme.background
         navigationController?.setNavigationBarHidden(true, animated: false)
+        buildRail()
         buildInterface()
         installKeyboardObservers()
-        loadChannels()
-        ChatService.shared.connectWebSocket(
-            token: token,
-            onMessage: { [weak self] message in
-                DispatchQueue.main.async {
-                    self?.receive(message)
+        if let directConversation {
+            channelTitle.text = directConversation.user.username
+            channelSubtitle.text = AetherLanguage.string("Direct message")
+            channelStripHeightConstraint?.constant = 0
+            reloadSelectedChannel()
+            directRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+                self?.refreshDirectMessages()
+            }
+        } else if let serverChannel {
+            select(serverChannel)
+        } else {
+            loadChannels()
+        }
+        if directConversation == nil {
+            ChatService.shared.connectWebSocket(
+                token: token,
+                onMessage: { [weak self] message in
+                    DispatchQueue.main.async {
+                        self?.receive(message)
+                    }
+                },
+                onReady: { [weak self] in
+                    DispatchQueue.main.async {
+                        self?.reloadSelectedChannel()
+                    }
                 }
-            },
-            onReady: { [weak self] in
+            )
+        }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(languageDidChange),
+            name: .aetherLanguageDidChange,
+            object: nil
+        )
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(true, animated: animated)
+        if directConversation == nil {
+            loadRailServers()
+            ChatService.shared.currentUser(token: token) { [weak self] result in
                 DispatchQueue.main.async {
-                    self?.reloadSelectedChannel()
+                    guard let self else { return }
+                    switch result {
+                    case .success(let currentUser):
+                        self.user = currentUser
+                        self.updateAccountButton()
+                    case .failure(let error):
+                        self.showNotice(error.localizedDescription)
+                    }
                 }
             }
-        )
+        }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         if isMovingFromParent || navigationController?.isBeingDismissed == true {
-            ChatService.shared.disconnectWebSocket()
+            directRefreshTimer?.invalidate()
+            directRefreshTimer = nil
+            if directConversation == nil {
+                ChatService.shared.disconnectWebSocket()
+            }
             NotificationCenter.default.removeObserver(self)
         }
     }
 
     deinit {
+        directRefreshTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
-        ChatService.shared.disconnectWebSocket()
+        if directConversation == nil {
+            ChatService.shared.disconnectWebSocket()
+        }
+    }
+
+    @objc private func showHome() {
+        if let navigationController, navigationController.viewControllers.count > 1 {
+            navigationController.popToRootViewController(animated: true)
+        }
+        guard let channel = channels.first(where: { $0.name == "general" }) ?? channels.first else { return }
+        select(channel)
+    }
+
+    @objc private func showDirectMessages() {
+        let page = CommunityViewController(page: .conversations, user: user, token: token)
+        navigationController?.pushViewController(page, animated: true)
+    }
+
+    @objc private func showFriends() {
+        let page = CommunityViewController(page: .friends, user: user, token: token)
+        navigationController?.pushViewController(page, animated: true)
+    }
+
+    @objc private func addServer() {
+        let page = CommunityViewController(page: .addServer, user: user, token: token)
+        navigationController?.pushViewController(page, animated: true)
+    }
+
+    @objc private func discoverServers() {
+        let page = CommunityViewController(page: .discoverServers, user: user, token: token)
+        navigationController?.pushViewController(page, animated: true)
+    }
+
+    private func buildRail() {
+        leftRail.translatesAutoresizingMaskIntoConstraints = false
+        leftRail.backgroundColor = AetherTheme.panel
+        view.addSubview(leftRail)
+
+        let divider = UIView()
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        divider.backgroundColor = AetherTheme.elevated
+        leftRail.addSubview(divider)
+
+        railStack.translatesAutoresizingMaskIntoConstraints = false
+        railStack.axis = .vertical
+        railStack.alignment = .center
+        railStack.spacing = 12
+        leftRail.addSubview(railStack)
+
+        let home = UIButton(type: .system)
+        home.translatesAutoresizingMaskIntoConstraints = false
+        home.setImage(UIImage(named: "AetherMark"), for: .normal)
+        home.tintColor = .white
+        home.backgroundColor = AetherTheme.accent
+        home.layer.cornerRadius = 17
+        home.clipsToBounds = true
+        home.accessibilityLabel = AetherLanguage.string("Aether home")
+        home.addTarget(self, action: #selector(showHome), for: .touchUpInside)
+        railStack.addArrangedSubview(home)
+        NSLayoutConstraint.activate([
+            home.widthAnchor.constraint(equalToConstant: 46),
+            home.heightAnchor.constraint(equalToConstant: 46)
+        ])
+
+        let separator = UIView()
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        separator.backgroundColor = AetherTheme.elevated
+        railStack.addArrangedSubview(separator)
+        NSLayoutConstraint.activate([
+            separator.widthAnchor.constraint(equalToConstant: 34),
+            separator.heightAnchor.constraint(equalToConstant: 2)
+        ])
+
+        let server = UIButton(type: .system)
+        server.translatesAutoresizingMaskIntoConstraints = false
+        server.setTitle("L", for: .normal)
+        server.setTitleColor(.white, for: .normal)
+        server.titleLabel?.font = .systemFont(ofSize: 18, weight: .bold)
+        server.backgroundColor = AetherTheme.elevated
+        server.layer.cornerRadius = 17
+        server.accessibilityLabel = "The Lounge server"
+        server.addTarget(self, action: #selector(showHome), for: .touchUpInside)
+        railStack.addArrangedSubview(server)
+        NSLayoutConstraint.activate([
+            server.widthAnchor.constraint(equalToConstant: 46),
+            server.heightAnchor.constraint(equalToConstant: 46)
+        ])
+        server.addTarget(self, action: #selector(showServers), for: .touchUpInside)
+
+        railStack.addArrangedSubview(makeRailButton(
+            symbol: "person.2.fill",
+            label: "Friends",
+            action: #selector(showFriends)
+        ))
+        railStack.addArrangedSubview(makeRailButton(
+            symbol: "bubble.left.and.bubble.right.fill",
+            label: "Direct messages",
+            action: #selector(showDirectMessages)
+        ))
+        railStack.addArrangedSubview(makeRailButton(
+            symbol: "plus",
+            label: "Add a server",
+            action: #selector(addServer)
+        ))
+        railStack.addArrangedSubview(makeRailButton(
+            symbol: "safari.fill",
+            label: "Discover servers",
+            action: #selector(discoverServers)
+        ))
+
+        let spacer = UIView()
+        railStack.addArrangedSubview(spacer)
+        spacer.setContentHuggingPriority(.defaultLow, for: .vertical)
+
+        let account = UIButton(type: .system)
+        account.translatesAutoresizingMaskIntoConstraints = false
+        account.setTitle(String(user.username.prefix(1)).uppercased(), for: .normal)
+        account.setTitleColor(.white, for: .normal)
+        account.titleLabel?.font = .systemFont(ofSize: 17, weight: .bold)
+        account.backgroundColor = AetherTheme.accent
+        account.layer.cornerRadius = 22
+        account.accessibilityLabel = AetherLanguage.string("Account settings")
+        accountButton = account
+        updateAccountButton()
+        account.addTarget(self, action: #selector(showAccountMenu), for: .touchUpInside)
+        railStack.addArrangedSubview(account)
+        NSLayoutConstraint.activate([
+            account.widthAnchor.constraint(equalToConstant: 46),
+            account.heightAnchor.constraint(equalToConstant: 46),
+            leftRail.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            leftRail.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            leftRail.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            leftRail.widthAnchor.constraint(equalToConstant: 68),
+            divider.trailingAnchor.constraint(equalTo: leftRail.trailingAnchor),
+            divider.topAnchor.constraint(equalTo: leftRail.topAnchor),
+            divider.bottomAnchor.constraint(equalTo: leftRail.bottomAnchor),
+            divider.widthAnchor.constraint(equalToConstant: 1),
+            railStack.leadingAnchor.constraint(equalTo: leftRail.leadingAnchor, constant: 10),
+            railStack.trailingAnchor.constraint(equalTo: leftRail.trailingAnchor, constant: -11),
+            railStack.topAnchor.constraint(equalTo: leftRail.topAnchor, constant: 12),
+            railStack.bottomAnchor.constraint(equalTo: leftRail.bottomAnchor, constant: -12)
+        ])
+    }
+
+    private func updateAccountButton() {
+        guard let accountButton else { return }
+        if let avatar = user.avatar,
+           let encoded = avatar.split(separator: ",", maxSplits: 1).last,
+           let data = Data(base64Encoded: String(encoded)),
+           let image = UIImage(data: data) {
+            accountButton.setTitle(nil, for: .normal)
+            accountButton.setImage(image, for: .normal)
+            accountButton.imageView?.contentMode = .scaleAspectFill
+            accountButton.clipsToBounds = true
+        } else {
+            accountButton.setImage(nil, for: .normal)
+            accountButton.setTitle(String(user.username.prefix(1)).uppercased(), for: .normal)
+        }
+    }
+
+    private func makeRailButton(symbol: String, label: String, action: Selector) -> UIButton {
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setImage(UIImage(systemName: symbol), for: .normal)
+        button.tintColor = AetherTheme.secondary
+        button.backgroundColor = AetherTheme.elevated
+        button.layer.cornerRadius = 17
+        button.accessibilityLabel = label
+        button.addTarget(self, action: action, for: .touchUpInside)
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 46),
+            button.heightAnchor.constraint(equalToConstant: 46)
+        ])
+        return button
     }
 
     private func buildInterface() {
@@ -78,16 +370,16 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         logo.clipsToBounds = true
         header.addSubview(logo)
 
-        let serverName = UILabel()
+        let serverName = serverNameLabel
         serverName.translatesAutoresizingMaskIntoConstraints = false
-        serverName.text = "THE LOUNGE"
+        serverName.text = AetherLanguage.string("THE LOUNGE")
         serverName.textColor = AetherTheme.text
         serverName.font = .systemFont(ofSize: 17, weight: .bold)
         header.addSubview(serverName)
 
-        let memberLine = UILabel()
+        let memberLine = memberLineLabel
         memberLine.translatesAutoresizingMaskIntoConstraints = false
-        memberLine.text = "LIVE COMMUNITY"
+        memberLine.text = AetherLanguage.string("LIVE COMMUNITY")
         memberLine.textColor = AetherTheme.secondary
         memberLine.font = .systemFont(ofSize: 10, weight: .bold)
         header.addSubview(memberLine)
@@ -96,16 +388,6 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         serverStatus.backgroundColor = AetherTheme.cyan
         serverStatus.layer.cornerRadius = 5
         header.addSubview(serverStatus)
-
-        let profile = UIButton(type: .system)
-        profile.translatesAutoresizingMaskIntoConstraints = false
-        profile.setTitle(String(user.username.prefix(1)).uppercased(), for: .normal)
-        profile.setTitleColor(.white, for: .normal)
-        profile.titleLabel?.font = .systemFont(ofSize: 16, weight: .bold)
-        profile.backgroundColor = AetherTheme.accent
-        profile.layer.cornerRadius = 19
-        profile.addTarget(self, action: #selector(showAccountMenu), for: .touchUpInside)
-        header.addSubview(profile)
 
         channelStrip.translatesAutoresizingMaskIntoConstraints = false
         channelStrip.axis = .horizontal
@@ -152,7 +434,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         messageScroll.addSubview(messageStack)
 
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
-        emptyLabel.text = "No messages yet.\nStart the conversation ✨"
+        emptyLabel.text = AetherLanguage.string("No messages yet.\nStart the conversation ✨")
         emptyLabel.textColor = AetherTheme.secondary
         emptyLabel.font = .systemFont(ofSize: 15, weight: .medium)
         emptyLabel.numberOfLines = 0
@@ -177,7 +459,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         messageInput.translatesAutoresizingMaskIntoConstraints = false
         messageInput.backgroundColor = .clear
         messageInput.textColor = AetherTheme.text
-        messageInput.font = .systemFont(ofSize: 15)
+        let messageFontSize = UserDefaults.standard.double(forKey: "aether.messageFontSize")
+        messageInput.font = .systemFont(ofSize: messageFontSize == 0 ? 15 : messageFontSize)
         messageInput.isScrollEnabled = true
         messageInput.textContainerInset = UIEdgeInsets(top: 12, left: 10, bottom: 10, right: 4)
         messageInput.textContainer.lineFragmentPadding = 0
@@ -205,9 +488,10 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         activity.color = AetherTheme.cyan
         view.addSubview(activity)
 
+        channelStripHeightConstraint = channelStrip.heightAnchor.constraint(equalToConstant: 50)
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            header.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            header.leadingAnchor.constraint(equalTo: leftRail.trailingAnchor),
             header.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             header.heightAnchor.constraint(equalToConstant: 66),
             logo.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 18),
@@ -222,22 +506,18 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
             serverStatus.centerYAnchor.constraint(equalTo: memberLine.centerYAnchor),
             serverStatus.widthAnchor.constraint(equalToConstant: 9),
             serverStatus.heightAnchor.constraint(equalToConstant: 9),
-            profile.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -18),
-            profile.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            profile.widthAnchor.constraint(equalToConstant: 38),
-            profile.heightAnchor.constraint(equalToConstant: 38),
 
             channelStrip.topAnchor.constraint(equalTo: header.bottomAnchor),
-            channelStrip.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            channelStrip.leadingAnchor.constraint(equalTo: leftRail.trailingAnchor, constant: 16),
             channelStrip.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -16),
-            channelStrip.heightAnchor.constraint(equalToConstant: 50),
+            channelStripHeightConstraint!,
             divider.topAnchor.constraint(equalTo: channelStrip.bottomAnchor),
-            divider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            divider.leadingAnchor.constraint(equalTo: leftRail.trailingAnchor),
             divider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             divider.heightAnchor.constraint(equalToConstant: 1),
 
             channelHeader.topAnchor.constraint(equalTo: divider.bottomAnchor, constant: 12),
-            channelHeader.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            channelHeader.leadingAnchor.constraint(equalTo: leftRail.trailingAnchor, constant: 20),
             channelHeader.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
             channelHeader.heightAnchor.constraint(equalToConstant: 48),
             hash.leadingAnchor.constraint(equalTo: channelHeader.leadingAnchor),
@@ -249,7 +529,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
             channelSubtitle.trailingAnchor.constraint(lessThanOrEqualTo: channelHeader.trailingAnchor),
 
             messageScroll.topAnchor.constraint(equalTo: channelHeader.bottomAnchor, constant: 8),
-            messageScroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            messageScroll.leadingAnchor.constraint(equalTo: leftRail.trailingAnchor),
             messageScroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
             messageStack.topAnchor.constraint(equalTo: messageScroll.contentLayoutGuide.topAnchor, constant: 15),
@@ -259,7 +539,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
             emptyLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 100),
 
             composer.topAnchor.constraint(equalTo: messageScroll.bottomAnchor),
-            composer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            composer.leadingAnchor.constraint(equalTo: leftRail.trailingAnchor),
             composer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             composer.heightAnchor.constraint(equalToConstant: 83),
             composer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
@@ -300,7 +580,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
                 case .success(let channels):
                     self.channels = channels
                     self.renderChannels()
-                    if let general = channels.first(where: { $0.name == "general" }) ?? channels.first {
+                    if self.selectedChannel == nil,
+                       let general = channels.first(where: { $0.name == "general" }) ?? channels.first {
                         self.select(general)
                     }
                 case .failure(let error):
@@ -342,7 +623,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         channelTitle.text = channel.name
         channelSubtitle.text = "\(channel.memberCount) members  ·  \(channel.description)"
         if let placeholder = composer.viewWithTag(702) as? UILabel {
-            placeholder.text = "Message #\(channel.name)"
+            placeholder.text = "\(AetherLanguage.string("Message")) #\(channel.name)"
         }
         renderChannels()
         renderMessages([])
@@ -350,6 +631,43 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
     }
 
     private func reloadSelectedChannel() {
+        if let directConversation {
+            activity.startAnimating()
+            ChatService.shared.directMessages(conversationID: directConversation.id, token: token) { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.activity.stopAnimating()
+                    switch result {
+                    case .success(let messages):
+                        self.mergeDirectMessages(messages)
+                    case .failure(let error):
+                        self.showNotice(error.localizedDescription)
+                    }
+                }
+
+                private func refreshDirectMessages() {
+                    guard let directConversation else { return }
+                    ChatService.shared.directMessages(conversationID: directConversation.id, token: token) { [weak self] result in
+                        DispatchQueue.main.async {
+                            guard let self else { return }
+                            switch result {
+                            case .success(let messages): self.mergeDirectMessages(messages)
+                            case .failure(let error): self.showNotice(error.localizedDescription)
+                            }
+                        }
+                    }
+                }
+
+                private func mergeDirectMessages(_ fetched: [ChatMessage]) {
+                    let combined = Dictionary(
+                        (fetched + messages).map { ($0.id, $0) },
+                        uniquingKeysWith: { _, newer in newer }
+                    ).values.sorted { $0.id < $1.id }
+                    renderMessages(combined)
+                }
+            }
+            return
+        }
         guard let channel = selectedChannel else { return }
         activity.startAnimating()
         ChatService.shared.messages(channelID: channel.id, token: token) { [weak self] result in
@@ -396,17 +714,34 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         row.alignment = .top
         row.spacing = 11
 
-        let avatar = UILabel()
-        avatar.text = String(message.username.prefix(1)).uppercased()
-        avatar.textColor = .white
-        avatar.font = .systemFont(ofSize: 15, weight: .bold)
-        avatar.textAlignment = .center
+        let avatar = UIImageView()
+        avatar.contentMode = .scaleAspectFill
         avatar.backgroundColor = avatarColor(for: message.username)
         avatar.layer.cornerRadius = 20
         avatar.clipsToBounds = true
         avatar.translatesAutoresizingMaskIntoConstraints = false
         avatar.widthAnchor.constraint(equalToConstant: 40).isActive = true
         avatar.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        if let avatarDataURL = message.avatar,
+           let encoded = avatarDataURL.split(separator: ",", maxSplits: 1).last,
+           let data = Data(base64Encoded: String(encoded)) {
+            avatar.image = UIImage(data: data)
+        }
+        if avatar.image == nil {
+            let initial = UILabel()
+            initial.translatesAutoresizingMaskIntoConstraints = false
+            initial.text = String(message.username.prefix(1)).uppercased()
+            initial.textColor = .white
+            initial.font = .systemFont(ofSize: 15, weight: .bold)
+            initial.textAlignment = .center
+            avatar.addSubview(initial)
+            NSLayoutConstraint.activate([
+                initial.leadingAnchor.constraint(equalTo: avatar.leadingAnchor),
+                initial.trailingAnchor.constraint(equalTo: avatar.trailingAnchor),
+                initial.topAnchor.constraint(equalTo: avatar.topAnchor),
+                initial.bottomAnchor.constraint(equalTo: avatar.bottomAnchor)
+            ])
+        }
         row.addArrangedSubview(avatar)
 
         let column = UIStackView()
@@ -431,7 +766,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         let body = UILabel()
         body.text = message.content
         body.textColor = AetherTheme.text
-        body.font = .systemFont(ofSize: 15)
+        let messageFontSize = UserDefaults.standard.double(forKey: "aether.messageFontSize")
+        body.font = .systemFont(ofSize: messageFontSize == 0 ? 15 : messageFontSize)
         body.numberOfLines = 0
         column.addArrangedSubview(heading)
         column.addArrangedSubview(body)
@@ -446,7 +782,13 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
     }
 
     private func receive(_ message: ChatMessage) {
-        guard selectedChannel?.id == message.channelID,
+        let belongsToConversation: Bool
+        if let directConversation {
+            belongsToConversation = message.conversationID == directConversation.id
+        } else {
+            belongsToConversation = selectedChannel?.id == message.channelID
+        }
+        guard belongsToConversation,
               !messages.contains(where: { $0.id == message.id }) else { return }
         messages.append(message)
         emptyLabel.removeFromSuperview()
@@ -457,11 +799,10 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
     }
 
     @objc private func sendMessage() {
-        guard let channel = selectedChannel else { return }
         let content = messageInput.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty else { return }
         sendButton.isEnabled = false
-        ChatService.shared.send(content: content, channelID: channel.id, token: token) { [weak self] result in
+        let completion: (Result<ChatMessage, Error>) -> Void = { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.sendButton.isEnabled = true
@@ -475,6 +816,18 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
                 }
             }
         }
+        if let directConversation {
+            ChatService.shared.sendDirectMessage(
+                content: content,
+                conversationID: directConversation.id,
+                token: token,
+                completion: completion
+            )
+        } else if let channel = selectedChannel {
+            ChatService.shared.send(content: content, channelID: channel.id, token: token, completion: completion)
+        } else {
+            sendButton.isEnabled = true
+        }
     }
 
     func textViewDidChange(_ textView: UITextView) {
@@ -485,15 +838,49 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         (composer.viewWithTag(702) as? UILabel)?.isHidden = !(messageInput.text ?? "").isEmpty
     }
 
+    @objc private func languageDidChange() {
+        serverNameLabel.text = AetherLanguage.string("THE LOUNGE")
+        memberLineLabel.text = AetherLanguage.string("LIVE COMMUNITY")
+        emptyLabel.text = AetherLanguage.string("No messages yet.\nStart the conversation ✨")
+        if let directConversation {
+            channelTitle.text = directConversation.user.username
+            channelSubtitle.text = AetherLanguage.string("Direct message")
+        } else if let selectedChannel {
+            channelTitle.text = selectedChannel.name
+            channelSubtitle.text = "\(selectedChannel.memberCount) \(AetherLanguage.string("members"))  ·  \(selectedChannel.description)"
+            if let placeholder = composer.viewWithTag(702) as? UILabel {
+                placeholder.text = "\(AetherLanguage.string("Message")) #\(selectedChannel.name)"
+            }
+            renderChannels()
+        }
+    }
+
     @objc private func showAccountMenu() {
-        let alert = UIAlertController(title: user.username, message: "Signed in to Aether", preferredStyle: .actionSheet)
-        alert.addAction(UIAlertAction(title: "Sign out", style: .destructive) { [weak self] _ in
+        let alert = UIAlertController(title: user.username, message: AetherLanguage.string("Signed in to Aether"), preferredStyle: .actionSheet)
+        alert.addAction(UIAlertAction(title: AetherLanguage.string("Account Settings"), style: .default) { [weak self] _ in
+            guard let self else { return }
+            self.navigationController?.pushViewController(
+                CommunityViewController(page: .settings, user: self.user, token: self.token),
+                animated: true
+            )
+        })
+        alert.addAction(UIAlertAction(title: AetherLanguage.string("Friends"), style: .default) { [weak self] _ in
+            self?.showFriends()
+        })
+        alert.addAction(UIAlertAction(title: AetherLanguage.string("Your Servers"), style: .default) { [weak self] _ in
+            guard let self else { return }
+            self.navigationController?.pushViewController(
+                CommunityViewController(page: .servers, user: self.user, token: self.token),
+                animated: true
+            )
+        })
+        alert.addAction(UIAlertAction(title: AetherLanguage.string("Sign out"), style: .destructive) { [weak self] _ in
             guard let self else { return }
             SessionStore.delete()
             ChatService.shared.disconnectWebSocket()
             self.navigationController?.setViewControllers([AuthViewController()], animated: true)
         })
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: AetherLanguage.string("Cancel"), style: .cancel))
         if let popover = alert.popoverPresentationController {
             popover.sourceView = view
             popover.sourceRect = CGRect(x: view.bounds.maxX - 36, y: view.safeAreaInsets.top + 32, width: 1, height: 1)

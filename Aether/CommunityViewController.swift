@@ -484,7 +484,7 @@ final class CommunityViewController: UIViewController, UIImagePickerControllerDe
         )
     }
 
-    private func addFriend() {
+    @objc private func addFriend() {
         let prompt = UIAlertController(
             title: AetherLanguage.string("Add a friend"),
             message: AetherLanguage.string("Enter at least two characters of their username."),

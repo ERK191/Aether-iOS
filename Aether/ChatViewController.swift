@@ -382,7 +382,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
             messageStack.addArrangedSubview(emptyLabel)
             return
         }
-        items.forEach { messageStack.addArrangedSubview(makeMessageView(message)) }
+        items.forEach { messageStack.addArrangedSubview(makeMessageView($0)) }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let bottom = CGPoint(x: 0, y: max(0, self.messageScroll.contentSize.height - self.messageScroll.bounds.height))

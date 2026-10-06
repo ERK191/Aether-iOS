@@ -40,6 +40,17 @@ final class CommunityViewController: UIViewController, UIImagePickerControllerDe
         title = pageTitle
         navigationController?.setNavigationBarHidden(false, animated: false)
         navigationController?.navigationBar.tintColor = AetherTheme.cyan
+        let navigationAppearance = UINavigationBarAppearance()
+        navigationAppearance.configureWithOpaqueBackground()
+        navigationAppearance.backgroundColor = AetherTheme.background
+        navigationAppearance.titleTextAttributes = [
+            .foregroundColor: AetherTheme.text,
+            .font: UIFont.systemFont(ofSize: 17, weight: .semibold)
+        ]
+        navigationController?.navigationBar.standardAppearance = navigationAppearance
+        if #available(iOS 15.0, *) {
+            navigationController?.navigationBar.scrollEdgeAppearance = navigationAppearance
+        }
         buildLayout()
         loadPage()
         if page == .friends {
@@ -131,9 +142,10 @@ final class CommunityViewController: UIViewController, UIImagePickerControllerDe
         let label = UILabel()
         label.text = text.uppercased()
         label.textColor = AetherTheme.secondary
-        label.font = .systemFont(ofSize: 12, weight: .bold)
+        label.font = .systemFont(ofSize: 11, weight: .bold)
         label.numberOfLines = 0
         label.translatesAutoresizingMaskIntoConstraints = false
+        label.accessibilityTraits = .header
         contentStack.addArrangedSubview(label)
         label.heightAnchor.constraint(greaterThanOrEqualToConstant: 28).isActive = true
     }
@@ -147,17 +159,29 @@ final class CommunityViewController: UIViewController, UIImagePickerControllerDe
         let button = UIButton(type: .system)
         button.translatesAutoresizingMaskIntoConstraints = false
         button.backgroundColor = AetherTheme.panel
-        button.layer.cornerRadius = 14
+        AetherTheme.surface(button, radius: 17)
         button.contentHorizontalAlignment = .leading
         button.tag = rowActions.count
         rowActions.append(action)
         button.addTarget(self, action: #selector(performRowAction(_:)), for: .touchUpInside)
 
+        let iconTile = UIView()
+        iconTile.translatesAutoresizingMaskIntoConstraints = false
+        iconTile.backgroundColor = AetherTheme.elevated
+        AetherTheme.rounded(iconTile, radius: 12)
+        button.addSubview(iconTile)
+
         let icon = UIImageView(image: UIImage(systemName: symbol))
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.tintColor = AetherTheme.cyan
         icon.contentMode = .scaleAspectFit
-        button.addSubview(icon)
+        iconTile.addSubview(icon)
+
+        let chevron = UIImageView(image: UIImage(systemName: "chevron.right"))
+        chevron.translatesAutoresizingMaskIntoConstraints = false
+        chevron.tintColor = AetherTheme.muted
+        chevron.contentMode = .scaleAspectFit
+        button.addSubview(chevron)
 
         let titleLabel = UILabel()
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -177,12 +201,20 @@ final class CommunityViewController: UIViewController, UIImagePickerControllerDe
         button.addSubview(subtitleLabel)
 
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 15),
-            icon.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 25),
-            icon.heightAnchor.constraint(equalToConstant: 25),
-            titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 13),
-            titleLabel.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -14),
+            iconTile.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 13),
+            iconTile.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            iconTile.widthAnchor.constraint(equalToConstant: 42),
+            iconTile.heightAnchor.constraint(equalToConstant: 42),
+            icon.centerXAnchor.constraint(equalTo: iconTile.centerXAnchor),
+            icon.centerYAnchor.constraint(equalTo: iconTile.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 20),
+            icon.heightAnchor.constraint(equalToConstant: 20),
+            chevron.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -14),
+            chevron.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            chevron.widthAnchor.constraint(equalToConstant: 10),
+            chevron.heightAnchor.constraint(equalToConstant: 14),
+            titleLabel.leadingAnchor.constraint(equalTo: iconTile.trailingAnchor, constant: 12),
+            titleLabel.trailingAnchor.constraint(equalTo: chevron.leadingAnchor, constant: -12),
             titleLabel.topAnchor.constraint(equalTo: button.topAnchor, constant: subtitle == nil ? 16 : 12),
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
@@ -698,7 +730,7 @@ final class CommunityViewController: UIViewController, UIImagePickerControllerDe
         label.numberOfLines = 0
         label.textAlignment = .center
         label.backgroundColor = AetherTheme.panel
-        label.layer.cornerRadius = 14
+        AetherTheme.surface(label, radius: 18)
         label.clipsToBounds = true
         label.translatesAutoresizingMaskIntoConstraints = false
         contentStack.addArrangedSubview(label)

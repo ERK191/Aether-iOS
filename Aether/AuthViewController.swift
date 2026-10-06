@@ -4,8 +4,10 @@ final class AuthViewController: UIViewController {
     private let scrollView = UIScrollView()
     private let contentView = UIView()
     private let iconView = UIImageView(image: UIImage(named: "AetherMark"))
+    private let iconHalo = UIView()
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
+    private let formCard = UIView()
     private let usernameField = UITextField()
     private let passwordField = UITextField()
     private let actionButton = UIButton(type: .system)
@@ -19,7 +21,22 @@ final class AuthViewController: UIViewController {
         navigationController?.setNavigationBarHidden(true, animated: false)
         view.backgroundColor = AetherTheme.background
         buildInterface()
+        addAmbientGlow()
         restoreSession()
+    }
+
+    private func addAmbientGlow() {
+        let glow = CAGradientLayer()
+        glow.colors = [
+            AetherTheme.accent.withAlphaComponent(0.20).cgColor,
+            AetherTheme.cyan.withAlphaComponent(0.06).cgColor,
+            UIColor.clear.cgColor
+        ]
+        glow.startPoint = CGPoint(x: 0, y: 0)
+        glow.endPoint = CGPoint(x: 1, y: 1)
+        glow.frame = CGRect(x: -view.bounds.width * 0.4, y: 0, width: view.bounds.width * 1.5, height: 430)
+        glow.cornerRadius = 215
+        view.layer.insertSublayer(glow, at: 0)
     }
 
     private func buildInterface() {
@@ -33,6 +50,17 @@ final class AuthViewController: UIViewController {
         iconView.contentMode = .scaleAspectFit
         iconView.layer.cornerRadius = 30
         iconView.clipsToBounds = true
+        iconHalo.translatesAutoresizingMaskIntoConstraints = false
+        iconHalo.backgroundColor = AetherTheme.accent.withAlphaComponent(0.16)
+        iconHalo.layer.cornerRadius = 44
+        iconHalo.layer.shadowColor = AetherTheme.accent.cgColor
+        iconHalo.layer.shadowOpacity = 0.42
+        iconHalo.layer.shadowRadius = 28
+        iconHalo.layer.shadowOffset = .zero
+
+        formCard.translatesAutoresizingMaskIntoConstraints = false
+        formCard.backgroundColor = AetherTheme.panel
+        AetherTheme.surface(formCard, radius: 22)
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.text = "Aether"
@@ -55,10 +83,10 @@ final class AuthViewController: UIViewController {
         usernameField.autocorrectionType = .no
         usernameField.textContentType = .username
         usernameField.returnKeyType = .next
-        usernameField.backgroundColor = AetherTheme.panel
-        usernameField.layer.borderColor = AetherTheme.elevated.cgColor
+        usernameField.backgroundColor = AetherTheme.elevated
+        usernameField.layer.borderColor = AetherTheme.border.cgColor
         usernameField.layer.borderWidth = 1
-        usernameField.layer.cornerRadius = 15
+        AetherTheme.rounded(usernameField, radius: 14)
         usernameField.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 16, height: 1))
         usernameField.leftViewMode = .always
 
@@ -69,10 +97,10 @@ final class AuthViewController: UIViewController {
         passwordField.isSecureTextEntry = true
         passwordField.textContentType = .password
         passwordField.returnKeyType = .go
-        passwordField.backgroundColor = AetherTheme.panel
-        passwordField.layer.borderColor = AetherTheme.elevated.cgColor
+        passwordField.backgroundColor = AetherTheme.elevated
+        passwordField.layer.borderColor = AetherTheme.border.cgColor
         passwordField.layer.borderWidth = 1
-        passwordField.layer.cornerRadius = 15
+        AetherTheme.rounded(passwordField, radius: 14)
         passwordField.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 16, height: 1))
         passwordField.leftViewMode = .always
 
@@ -81,7 +109,11 @@ final class AuthViewController: UIViewController {
         actionButton.setTitleColor(.white, for: .normal)
         actionButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .bold)
         actionButton.backgroundColor = AetherTheme.accent
-        actionButton.layer.cornerRadius = 15
+        AetherTheme.rounded(actionButton, radius: 15)
+        actionButton.layer.shadowColor = AetherTheme.accent.cgColor
+        actionButton.layer.shadowOpacity = 0.32
+        actionButton.layer.shadowRadius = 12
+        actionButton.layer.shadowOffset = CGSize(width: 0, height: 5)
         actionButton.addTarget(self, action: #selector(submitCredentials), for: .touchUpInside)
 
         modeButton.translatesAutoresizingMaskIntoConstraints = false
@@ -100,8 +132,8 @@ final class AuthViewController: UIViewController {
         activity.color = .white
         activity.hidesWhenStopped = true
 
-        [iconView, titleLabel, subtitleLabel, usernameField, passwordField, actionButton,
-         modeButton, statusLabel, activity].forEach(contentView.addSubview)
+        [formCard, iconHalo, iconView, titleLabel, subtitleLabel, usernameField, passwordField,
+         actionButton, modeButton, statusLabel, activity].forEach(contentView.addSubview)
 
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -118,6 +150,10 @@ final class AuthViewController: UIViewController {
             iconView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             iconView.widthAnchor.constraint(equalToConstant: 112),
             iconView.heightAnchor.constraint(equalToConstant: 112),
+            iconHalo.centerXAnchor.constraint(equalTo: iconView.centerXAnchor),
+            iconHalo.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
+            iconHalo.widthAnchor.constraint(equalToConstant: 88),
+            iconHalo.heightAnchor.constraint(equalToConstant: 88),
             titleLabel.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 18),
             titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 28),
             titleLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -28),
@@ -125,9 +161,12 @@ final class AuthViewController: UIViewController {
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
 
-            usernameField.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 40),
-            usernameField.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 28),
-            usernameField.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -28),
+            formCard.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 30),
+            formCard.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
+            formCard.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20),
+            usernameField.topAnchor.constraint(equalTo: formCard.topAnchor, constant: 20),
+            usernameField.leadingAnchor.constraint(equalTo: formCard.leadingAnchor, constant: 16),
+            usernameField.trailingAnchor.constraint(equalTo: formCard.trailingAnchor, constant: -16),
             usernameField.heightAnchor.constraint(equalToConstant: 54),
             passwordField.topAnchor.constraint(equalTo: usernameField.bottomAnchor, constant: 12),
             passwordField.leadingAnchor.constraint(equalTo: usernameField.leadingAnchor),
@@ -137,6 +176,7 @@ final class AuthViewController: UIViewController {
             actionButton.leadingAnchor.constraint(equalTo: usernameField.leadingAnchor),
             actionButton.trailingAnchor.constraint(equalTo: usernameField.trailingAnchor),
             actionButton.heightAnchor.constraint(equalToConstant: 54),
+            formCard.bottomAnchor.constraint(equalTo: actionButton.bottomAnchor, constant: 16),
             modeButton.topAnchor.constraint(equalTo: actionButton.bottomAnchor, constant: 14),
             modeButton.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             modeButton.heightAnchor.constraint(equalToConstant: 42),

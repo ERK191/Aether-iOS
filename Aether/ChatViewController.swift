@@ -14,6 +14,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
     private var railServers: [AetherServer] = []
     private var railServerButtons: [UIButton] = []
     private let header = UIView()
+    private let channelScrollView = UIScrollView()
     private let channelStrip = UIStackView()
     private let serverStatus = UIView()
     private let serverNameLabel = UILabel()
@@ -85,7 +86,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
                     button.setTitleColor(.white, for: .normal)
                     button.titleLabel?.font = .systemFont(ofSize: 17, weight: .bold)
                     button.backgroundColor = AetherTheme.elevated
-                    button.layer.cornerRadius = 17
+                    AetherTheme.surface(button, radius: 16)
                     button.tag = index
                     button.accessibilityLabel = server.name
                     button.addTarget(self, action: #selector(self.openRailServer(_:)), for: .touchUpInside)
@@ -217,7 +218,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
 
     private func buildRail() {
         leftRail.translatesAutoresizingMaskIntoConstraints = false
-        leftRail.backgroundColor = AetherTheme.panel
+        leftRail.backgroundColor = AetherTheme.background
         view.addSubview(leftRail)
 
         let divider = UIView()
@@ -236,7 +237,11 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         home.setImage(UIImage(named: "AetherMark"), for: .normal)
         home.tintColor = .white
         home.backgroundColor = AetherTheme.accent
-        home.layer.cornerRadius = 17
+        AetherTheme.rounded(home, radius: 16)
+        home.layer.shadowColor = AetherTheme.accent.cgColor
+        home.layer.shadowOpacity = 0.30
+        home.layer.shadowRadius = 10
+        home.layer.shadowOffset = CGSize(width: 0, height: 4)
         home.clipsToBounds = true
         home.accessibilityLabel = AetherLanguage.string("Aether home")
         home.addTarget(self, action: #selector(showHome), for: .touchUpInside)
@@ -257,11 +262,11 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
 
         let server = UIButton(type: .system)
         server.translatesAutoresizingMaskIntoConstraints = false
-        server.setTitle("L", for: .normal)
+        server.setTitle("A", for: .normal)
         server.setTitleColor(.white, for: .normal)
         server.titleLabel?.font = .systemFont(ofSize: 18, weight: .bold)
         server.backgroundColor = AetherTheme.elevated
-        server.layer.cornerRadius = 17
+        AetherTheme.surface(server, radius: 16)
         server.accessibilityLabel = "The Lounge server"
         server.addTarget(self, action: #selector(showHome), for: .touchUpInside)
         railStack.addArrangedSubview(server)
@@ -302,7 +307,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         account.setTitleColor(.white, for: .normal)
         account.titleLabel?.font = .systemFont(ofSize: 17, weight: .bold)
         account.backgroundColor = AetherTheme.accent
-        account.layer.cornerRadius = 22
+        AetherTheme.rounded(account, radius: 16)
         account.accessibilityLabel = AetherLanguage.string("Account settings")
         accountButton = account
         updateAccountButton()
@@ -347,8 +352,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         button.translatesAutoresizingMaskIntoConstraints = false
         button.setImage(UIImage(systemName: symbol), for: .normal)
         button.tintColor = AetherTheme.secondary
-        button.backgroundColor = AetherTheme.elevated
-        button.layer.cornerRadius = 17
+        button.backgroundColor = AetherTheme.panel
+        AetherTheme.surface(button, radius: 16)
         button.accessibilityLabel = label
         button.addTarget(self, action: action, for: .touchUpInside)
         NSLayoutConstraint.activate([
@@ -360,7 +365,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
 
     private func buildInterface() {
         header.translatesAutoresizingMaskIntoConstraints = false
-        header.backgroundColor = AetherTheme.background
+        header.backgroundColor = AetherTheme.panel
         view.addSubview(header)
 
         let logo = UIImageView(image: UIImage(named: "AetherMark"))
@@ -368,6 +373,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         logo.contentMode = .scaleAspectFit
         logo.layer.cornerRadius = 17
         logo.clipsToBounds = true
+        logo.layer.borderWidth = 1
+        logo.layer.borderColor = AetherTheme.border.cgColor
         header.addSubview(logo)
 
         let serverName = serverNameLabel
@@ -394,11 +401,16 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         channelStrip.alignment = .center
         channelStrip.spacing = 9
         channelStrip.distribution = .fill
-        view.addSubview(channelStrip)
+        channelScrollView.translatesAutoresizingMaskIntoConstraints = false
+        channelScrollView.showsHorizontalScrollIndicator = false
+        channelScrollView.alwaysBounceHorizontal = true
+        channelScrollView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 12)
+        view.addSubview(channelScrollView)
+        channelScrollView.addSubview(channelStrip)
 
         let divider = UIView()
         divider.translatesAutoresizingMaskIntoConstraints = false
-        divider.backgroundColor = AetherTheme.elevated
+        divider.backgroundColor = AetherTheme.border.withAlphaComponent(0.55)
         view.addSubview(divider)
 
         let channelHeader = UIView()
@@ -430,7 +442,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
 
         messageStack.translatesAutoresizingMaskIntoConstraints = false
         messageStack.axis = .vertical
-        messageStack.spacing = 18
+        messageStack.spacing = 10
         messageScroll.addSubview(messageStack)
 
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -453,7 +465,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         let inputBackground = UIView()
         inputBackground.translatesAutoresizingMaskIntoConstraints = false
         inputBackground.backgroundColor = AetherTheme.panel
-        inputBackground.layer.cornerRadius = 20
+        AetherTheme.surface(inputBackground, radius: 20)
         composer.addSubview(inputBackground)
 
         messageInput.translatesAutoresizingMaskIntoConstraints = false
@@ -488,7 +500,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         activity.color = AetherTheme.cyan
         view.addSubview(activity)
 
-        channelStripHeightConstraint = channelStrip.heightAnchor.constraint(equalToConstant: 50)
+        channelStripHeightConstraint = channelScrollView.heightAnchor.constraint(equalToConstant: 50)
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             header.leadingAnchor.constraint(equalTo: leftRail.trailingAnchor),
@@ -507,11 +519,16 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
             serverStatus.widthAnchor.constraint(equalToConstant: 9),
             serverStatus.heightAnchor.constraint(equalToConstant: 9),
 
-            channelStrip.topAnchor.constraint(equalTo: header.bottomAnchor),
-            channelStrip.leadingAnchor.constraint(equalTo: leftRail.trailingAnchor, constant: 16),
-            channelStrip.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -16),
+            channelScrollView.topAnchor.constraint(equalTo: header.bottomAnchor),
+            channelScrollView.leadingAnchor.constraint(equalTo: leftRail.trailingAnchor, constant: 16),
+            channelScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             channelStripHeightConstraint!,
-            divider.topAnchor.constraint(equalTo: channelStrip.bottomAnchor),
+            channelStrip.leadingAnchor.constraint(equalTo: channelScrollView.contentLayoutGuide.leadingAnchor),
+            channelStrip.trailingAnchor.constraint(equalTo: channelScrollView.contentLayoutGuide.trailingAnchor),
+            channelStrip.topAnchor.constraint(equalTo: channelScrollView.contentLayoutGuide.topAnchor),
+            channelStrip.bottomAnchor.constraint(equalTo: channelScrollView.contentLayoutGuide.bottomAnchor),
+            channelStrip.heightAnchor.constraint(equalTo: channelScrollView.frameLayoutGuide.heightAnchor),
+            divider.topAnchor.constraint(equalTo: channelScrollView.bottomAnchor),
             divider.leadingAnchor.constraint(equalTo: leftRail.trailingAnchor),
             divider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             divider.heightAnchor.constraint(equalToConstant: 1),
@@ -606,7 +623,16 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
             button.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
             button.contentEdgeInsets = UIEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
             button.backgroundColor = channel.id == selectedChannel?.id ? AetherTheme.accent : AetherTheme.panel
-            button.layer.cornerRadius = 16
+            AetherTheme.rounded(button, radius: 14)
+            if channel.id == selectedChannel?.id {
+                button.layer.shadowColor = AetherTheme.accent.cgColor
+                button.layer.shadowOpacity = 0.22
+                button.layer.shadowRadius = 6
+                button.layer.shadowOffset = CGSize(width: 0, height: 3)
+            } else {
+                button.layer.borderWidth = 1
+                button.layer.borderColor = AetherTheme.border.withAlphaComponent(0.45).cgColor
+            }
             button.tag = channels.firstIndex(where: { $0.id == channel.id }) ?? 0
             button.addTarget(self, action: #selector(selectChannel(_:)), for: .touchUpInside)
             channelStrip.addArrangedSubview(button)
@@ -712,16 +738,22 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         let row = UIStackView()
         row.axis = .horizontal
         row.alignment = .top
-        row.spacing = 11
+        row.spacing = 12
+        row.isLayoutMarginsRelativeArrangement = true
+        row.layoutMargins = UIEdgeInsets(top: 11, left: 11, bottom: 11, right: 12)
+        row.backgroundColor = AetherTheme.panel
+        AetherTheme.surface(row, radius: 16)
 
         let avatar = UIImageView()
         avatar.contentMode = .scaleAspectFill
         avatar.backgroundColor = avatarColor(for: message.username)
-        avatar.layer.cornerRadius = 20
+        avatar.layer.cornerRadius = 18
         avatar.clipsToBounds = true
+        avatar.layer.borderWidth = 1.5
+        avatar.layer.borderColor = AetherTheme.border.withAlphaComponent(0.75).cgColor
         avatar.translatesAutoresizingMaskIntoConstraints = false
-        avatar.widthAnchor.constraint(equalToConstant: 40).isActive = true
-        avatar.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        avatar.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        avatar.heightAnchor.constraint(equalToConstant: 36).isActive = true
         if let avatarDataURL = message.avatar,
            let encoded = avatarDataURL.split(separator: ",", maxSplits: 1).last,
            let data = Data(base64Encoded: String(encoded)) {
@@ -754,7 +786,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         heading.spacing = 8
         let name = UILabel()
         name.text = message.username
-        name.textColor = AetherTheme.cyan
+        name.textColor = AetherTheme.text
         name.font = .systemFont(ofSize: 14, weight: .bold)
         let time = UILabel()
         time.text = DateFormatter.localizedString(from: message.createdAt, dateStyle: .none, timeStyle: .short)
@@ -765,7 +797,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
 
         let body = UILabel()
         body.text = message.content
-        body.textColor = AetherTheme.text
+        body.textColor = AetherTheme.secondary
         let messageFontSize = UserDefaults.standard.double(forKey: "aether.messageFontSize")
         body.font = .systemFont(ofSize: messageFontSize == 0 ? 15 : messageFontSize)
         body.numberOfLines = 0

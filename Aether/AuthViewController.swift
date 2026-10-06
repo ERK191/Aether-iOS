@@ -277,7 +277,10 @@ final class AuthViewController: UIViewController {
     }
 
     private func openChat(user: ChatUser, token: String) {
-        let home = MainTabBarController(user: user, token: token)
-        navigationController?.setViewControllers([home], animated: true)
+        guard let appDelegate = UIApplication.shared.delegate as? AppDelegate else {
+            statusLabel.text = "Could not open Aether. Please restart the app and try again."
+            return
+        }
+        appDelegate.showMain(user: user, token: token)
     }
 }

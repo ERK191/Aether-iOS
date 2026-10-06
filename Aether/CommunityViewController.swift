@@ -1067,7 +1067,11 @@ final class CommunityViewController: UIViewController, UIImagePickerControllerDe
     private func signOut() {
         SessionStore.delete()
         ChatService.shared.disconnectWebSocket()
-        navigationController?.setViewControllers([AuthViewController()], animated: true)
+        guard let appDelegate = UIApplication.shared.delegate as? AppDelegate else {
+            showNotice(AetherLanguage.string("Could not sign out. Please restart the app and try again."))
+            return
+        }
+        appDelegate.showAuthentication()
     }
 
     private func confirmDeleteAccount() {

@@ -671,7 +671,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
 
     @objc private func languageDidChange() {
         updateEmptyStateText()
-        if let directConversation {
+        if directConversation != nil {
             updateDirectHeader()
         } else if let selectedChannel {
             channelTitle.text = selectedChannel.name

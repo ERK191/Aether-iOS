@@ -1,10 +1,12 @@
 import UIKit
 
-final class ChatViewController: UIViewController, UITextViewDelegate {
+final class ChatViewController: UIViewController, UITextViewDelegate, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
     private var user: ChatUser
     private let token: String
     private let directConversation: DirectConversation?
     private let serverChannel: Channel?
+    private var directUser: ChatUser?
+    private var initialMessageID: Int64?
     private var channels: [Channel] = []
     private var selectedChannel: Channel?
     private var messages: [ChatMessage] = []
@@ -24,21 +26,27 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
     private let composer = UIView()
     private let messageInput = UITextView()
     private let sendButton = UIButton(type: .system)
+    private let photoButton = UIButton(type: .system)
     private let activity = UIActivityIndicatorView(style: .medium)
     private var composerBottomConstraint: NSLayoutConstraint?
     private var channelStripHeightConstraint: NSLayoutConstraint?
     private var directRefreshTimer: Timer?
+    private var presenceRefreshTimer: Timer?
+    private var lastMarkedMessageByRoom: [String: Int64] = [:]
 
     init(
         user: ChatUser,
         token: String,
         directConversation: DirectConversation? = nil,
-        serverChannel: Channel? = nil
+        serverChannel: Channel? = nil,
+        initialMessageID: Int64? = nil
     ) {
         self.user = user
         self.token = token
         self.directConversation = directConversation
         self.serverChannel = serverChannel
+        self.directUser = directConversation?.user
+        self.initialMessageID = initialMessageID
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -73,6 +81,9 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
             reloadSelectedChannel()
             directRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 self?.refreshDirectMessages()
+            }
+            presenceRefreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+                self?.refreshDirectPresence()
             }
         } else if let serverChannel {
             channelStripHeightConstraint?.constant = 0
@@ -126,6 +137,8 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         if isMovingFromParent || navigationController?.isBeingDismissed == true {
             directRefreshTimer?.invalidate()
             directRefreshTimer = nil
+            presenceRefreshTimer?.invalidate()
+            presenceRefreshTimer = nil
             if directConversation == nil {
                 ChatService.shared.disconnectWebSocket()
             }
@@ -135,6 +148,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
 
     deinit {
         directRefreshTimer?.invalidate()
+        presenceRefreshTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
         if directConversation == nil {
             ChatService.shared.disconnectWebSocket()
@@ -284,6 +298,13 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         sendButton.addTarget(self, action: #selector(sendMessage), for: .touchUpInside)
         inputBackground.addSubview(sendButton)
 
+        photoButton.translatesAutoresizingMaskIntoConstraints = false
+        photoButton.setImage(UIImage(systemName: "photo"), for: .normal)
+        photoButton.tintColor = AetherTheme.accent
+        photoButton.accessibilityLabel = AetherLanguage.string("Send a photo")
+        photoButton.addTarget(self, action: #selector(choosePhoto), for: .touchUpInside)
+        composer.addSubview(photoButton)
+
         activity.translatesAutoresizingMaskIntoConstraints = false
         activity.color = AetherTheme.cyan
         view.addSubview(activity)
@@ -349,9 +370,13 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
             composerLine.heightAnchor.constraint(equalToConstant: 1),
 
             inputBackground.topAnchor.constraint(equalTo: composer.topAnchor, constant: 11),
-            inputBackground.leadingAnchor.constraint(equalTo: composer.leadingAnchor, constant: 15),
+            inputBackground.leadingAnchor.constraint(equalTo: photoButton.trailingAnchor, constant: 5),
             inputBackground.trailingAnchor.constraint(equalTo: composer.trailingAnchor, constant: -15),
             inputBackground.heightAnchor.constraint(equalToConstant: 52),
+            photoButton.leadingAnchor.constraint(equalTo: composer.leadingAnchor, constant: 7),
+            photoButton.centerYAnchor.constraint(equalTo: inputBackground.centerYAnchor),
+            photoButton.widthAnchor.constraint(equalToConstant: 42),
+            photoButton.heightAnchor.constraint(equalToConstant: 44),
             messageInput.leadingAnchor.constraint(equalTo: inputBackground.leadingAnchor, constant: 10),
             messageInput.topAnchor.constraint(equalTo: inputBackground.topAnchor, constant: 1),
             messageInput.bottomAnchor.constraint(equalTo: inputBackground.bottomAnchor, constant: -1),
@@ -444,10 +469,16 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
     }
 
     private func updateDirectHeader() {
-        guard let directConversation else { return }
-        channelTitle.text = directConversation.user.username
-        channelSubtitle.text = AetherLanguage.string("Aether private chat")
-        headerAvatar.image = avatarImage(from: directConversation.user.avatar) ?? UIImage(systemName: "person.fill")
+        guard let directUser else { return }
+        channelTitle.text = directUser.username
+        if directUser.isOnline {
+            channelSubtitle.text = AetherLanguage.string("Online")
+        } else if let lastSeenAt = directUser.lastSeenAt {
+            channelSubtitle.text = "\(AetherLanguage.string("Last seen")) \(DateFormatter.localizedString(from: lastSeenAt, dateStyle: .short, timeStyle: .short))"
+        } else {
+            channelSubtitle.text = AetherLanguage.string("Aether private chat")
+        }
+        headerAvatar.image = avatarImage(from: directUser.avatar) ?? UIImage(systemName: "person.fill")
     }
 
     private func avatarImage(from dataURL: String?) -> UIImage? {
@@ -464,7 +495,12 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
     private func reloadSelectedChannel() {
         if let directConversation {
             activity.startAnimating()
-            ChatService.shared.directMessages(conversationID: directConversation.id, token: token) { [weak self] result in
+            let beforeMessageID = searchPageCursor()
+            ChatService.shared.directMessages(
+                conversationID: directConversation.id,
+                token: token,
+                beforeMessageID: beforeMessageID
+            ) { [weak self] result in
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.activity.stopAnimating()
@@ -480,7 +516,12 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         }
         guard let channel = selectedChannel else { return }
         activity.startAnimating()
-        ChatService.shared.messages(channelID: channel.id, token: token) { [weak self] result in
+        let beforeMessageID = searchPageCursor()
+        ChatService.shared.messages(
+            channelID: channel.id,
+            token: token,
+            beforeMessageID: beforeMessageID
+        ) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self, self.selectedChannel?.id == channel.id else { return }
                 self.activity.stopAnimating()
@@ -499,6 +540,13 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         }
     }
 
+    private func searchPageCursor() -> Int64? {
+        guard let initialMessageID else { return nil }
+        self.initialMessageID = nil
+        guard initialMessageID < Int64.max else { return nil }
+        return initialMessageID + 1
+    }
+
     private func refreshDirectMessages() {
         guard let directConversation else { return }
         ChatService.shared.directMessages(conversationID: directConversation.id, token: token) { [weak self] result in
@@ -507,6 +555,22 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
                 switch result {
                 case .success(let messages): self.mergeDirectMessages(messages)
                 case .failure(let error): self.showNotice(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func refreshDirectPresence() {
+        guard let directConversation else { return }
+        ChatService.shared.conversations(token: token) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let conversations):
+                    self.directUser = conversations.first(where: { $0.id == directConversation.id })?.user
+                    self.updateDirectHeader()
+                case .failure(let error):
+                    self.showNotice(error.localizedDescription)
                 }
             }
         }
@@ -534,6 +598,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         emptyStateView.isHidden = true
         messageStack.isHidden = false
         items.forEach { messageStack.addArrangedSubview(makeMessageView($0)) }
+        markLatestMessageRead(in: items)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let bottom = CGPoint(x: 0, y: max(0, self.messageScroll.contentSize.height - self.messageScroll.bounds.height))
@@ -564,13 +629,33 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
             bubble.addArrangedSubview(sender)
         }
 
+        if let image = messageImage(from: message.imageData) {
+            let imageView = UIImageView(image: image)
+            imageView.translatesAutoresizingMaskIntoConstraints = false
+            imageView.contentMode = .scaleAspectFit
+            imageView.clipsToBounds = true
+            imageView.layer.cornerRadius = 9
+            imageView.accessibilityLabel = AetherLanguage.string("Photo message")
+            NSLayoutConstraint.activate([
+                imageView.widthAnchor.constraint(lessThanOrEqualToConstant: 220),
+                imageView.heightAnchor.constraint(lessThanOrEqualToConstant: 180),
+                imageView.heightAnchor.constraint(
+                    equalTo: imageView.widthAnchor,
+                    multiplier: image.size.height / max(image.size.width, 1)
+                )
+            ])
+            bubble.addArrangedSubview(imageView)
+        }
+
         let body = UILabel()
         body.text = message.content
         body.textColor = AetherTheme.text
         let messageFontSize = UserDefaults.standard.double(forKey: "aether.messageFontSize")
         body.font = .systemFont(ofSize: messageFontSize == 0 ? 15 : messageFontSize)
         body.numberOfLines = 0
-        bubble.addArrangedSubview(body)
+        if !message.content.isEmpty {
+            bubble.addArrangedSubview(body)
+        }
 
         let footer = UIStackView()
         footer.axis = .horizontal
@@ -624,6 +709,7 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
         messageStack.isHidden = false
         messages.append(message)
         messageStack.addArrangedSubview(makeMessageView(message))
+        markLatestMessageRead(in: messages)
         view.layoutIfNeeded()
         let bottom = CGPoint(x: 0, y: max(0, messageScroll.contentSize.height - messageScroll.bounds.height))
         messageScroll.setContentOffset(bottom, animated: true)
@@ -632,11 +718,20 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
     @objc private func sendMessage() {
         let content = messageInput.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty else { return }
+        send(content: content, imageData: nil)
+    }
+
+    private func send(content: String, imageData: String?) {
+        guard !content.isEmpty || imageData != nil else { return }
         sendButton.isEnabled = false
+        photoButton.isEnabled = false
+        photoButton.alpha = 0.55
         let completion: (Result<ChatMessage, Error>) -> Void = { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.sendButton.isEnabled = true
+                self.photoButton.isEnabled = true
+                self.photoButton.alpha = 1
                 switch result {
                 case .success(let message):
                     self.messageInput.text = nil
@@ -652,13 +747,106 @@ final class ChatViewController: UIViewController, UITextViewDelegate {
                 content: content,
                 conversationID: directConversation.id,
                 token: token,
+                imageData: imageData,
                 completion: completion
             )
         } else if let channel = selectedChannel {
-            ChatService.shared.send(content: content, channelID: channel.id, token: token, completion: completion)
+            ChatService.shared.send(
+                content: content,
+                channelID: channel.id,
+                token: token,
+                imageData: imageData,
+                completion: completion
+            )
         } else {
             sendButton.isEnabled = true
+            photoButton.isEnabled = true
+            photoButton.alpha = 1
         }
+    }
+
+    private func markLatestMessageRead(in items: [ChatMessage]) {
+        guard let latest = items.last else { return }
+        let scope = directConversation == nil ? "channel" : "direct"
+        let roomID = directConversation?.id ?? latest.channelID
+        guard let roomID else { return }
+        let key = "\(scope):\(roomID)"
+        guard latest.id > lastMarkedMessageByRoom[key, default: 0] else { return }
+        lastMarkedMessageByRoom[key] = latest.id
+        ChatService.shared.markRead(
+            scope: scope,
+            roomID: roomID,
+            lastMessageID: latest.id,
+            token: token
+        ) { [weak self] result in
+            if case .failure(let error) = result {
+                DispatchQueue.main.async {
+                    self?.lastMarkedMessageByRoom.removeValue(forKey: key)
+                    self?.showNotice(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func messageImage(from dataURL: String?) -> UIImage? {
+        guard let dataURL,
+              let encoded = dataURL.split(separator: ",", maxSplits: 1).last,
+              let data = Data(base64Encoded: String(encoded)) else { return nil }
+        return UIImage(data: data)
+    }
+
+    @objc private func choosePhoto() {
+        guard UIImagePickerController.isSourceTypeAvailable(.photoLibrary) else {
+            showNotice(AetherLanguage.string("Photo library is not available on this device."))
+            return
+        }
+        let picker = UIImagePickerController()
+        picker.sourceType = .photoLibrary
+        picker.delegate = self
+        picker.allowsEditing = true
+        present(picker, animated: true)
+    }
+
+    func imagePickerController(
+        _ picker: UIImagePickerController,
+        didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+    ) {
+        picker.dismiss(animated: true)
+        guard let image = (info[.editedImage] as? UIImage) ?? (info[.originalImage] as? UIImage),
+              let data = compressedPhoto(image, maximumBytes: 512 * 1024) else {
+            showNotice(AetherLanguage.string("That photo could not be prepared. Try a smaller image."))
+            return
+        }
+        send(
+            content: messageInput.text.trimmingCharacters(in: .whitespacesAndNewlines),
+            imageData: "data:image/jpeg;base64,\(data.base64EncodedString())"
+        )
+    }
+
+    func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+        picker.dismiss(animated: true)
+    }
+
+    private func compressedPhoto(_ image: UIImage, maximumBytes: Int) -> Data? {
+        var size = image.size
+        let longestEdge = max(size.width, size.height)
+        if longestEdge > 1280 {
+            let scale = 1280 / longestEdge
+            size = CGSize(width: size.width * scale, height: size.height * scale)
+        }
+        for _ in 0..<7 {
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            let renderer = UIGraphicsImageRenderer(size: size, format: format)
+            let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+            for quality in stride(from: 0.82, through: 0.34, by: -0.08) {
+                if let data = resized.jpegData(compressionQuality: quality), data.count <= maximumBytes {
+                    return data
+                }
+            }
+            size = CGSize(width: size.width * 0.78, height: size.height * 0.78)
+        }
+        return nil
     }
 
     func textViewDidChange(_ textView: UITextView) {

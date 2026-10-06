@@ -21,13 +21,13 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Aether uses your photo library so you can choose a profile picture.</string>
+	<string>Aether uses your photo library so you can choose a profile picture or send a photo in chat.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIUserInterfaceStyle</key>
-	<string>Dark</string>
+	<string>Light</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

@@ -14,6 +14,9 @@ final class ChatService {
     private var socketToken: String?
     private var socketHandler: ((ChatMessage) -> Void)?
     private var reconnectAttempt = 0
+    private let presenceLock = NSLock()
+    private var presenceID = UUID().uuidString.lowercased()
+    private var presenceToken: String?
 
     private init() {
         let configuration = URLSessionConfiguration.default
@@ -74,10 +77,15 @@ final class ChatService {
     func messages(
         channelID: Int64,
         token: String,
+        beforeMessageID: Int64? = nil,
         completion: @escaping (Result<[ChatMessage], Error>) -> Void
     ) {
+        var queryItems = [URLQueryItem(name: "limit", value: "50")]
+        if let beforeMessageID {
+            queryItems.append(URLQueryItem(name: "before", value: String(beforeMessageID)))
+        }
         request(
-            path: "/api/channels/\(channelID)/messages?limit=50",
+            path: queryPath("/api/channels/\(channelID)/messages", items: queryItems),
             method: "GET",
             token: token,
             body: Optional<[String: String]>.none
@@ -90,13 +98,14 @@ final class ChatService {
         content: String,
         channelID: Int64,
         token: String,
+        imageData: String? = nil,
         completion: @escaping (Result<ChatMessage, Error>) -> Void
     ) {
         request(
             path: "/api/channels/\(channelID)/messages",
             method: "POST",
             token: token,
-            body: ["content": content]
+            body: ChatMessageBody(content: content, imageData: imageData)
         ) { (result: Result<MessageResponse, Error>) in
             completion(result.map(\.message))
         }
@@ -165,6 +174,71 @@ final class ChatService {
         }
     }
 
+    func markRead(
+        scope: String,
+        roomID: Int64,
+        lastMessageID: Int64,
+        token: String,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        request(
+            path: "/api/read-state",
+            method: "POST",
+            token: token,
+            body: ReadStateBody(scope: scope, roomID: String(roomID), lastReadMessageID: String(lastMessageID))
+        ) { (result: Result<ReadStateResponse, Error>) in
+            completion(result.map { _ in () })
+        }
+    }
+
+    func heartbeatPresence(token: String, completion: ((Result<Void, Error>) -> Void)? = nil) {
+        request(
+            path: "/api/presence/heartbeat",
+            method: "POST",
+            token: token,
+            body: PresenceBody(sessionID: presenceID(for: token))
+        ) { (result: Result<PresenceResponse, Error>) in
+            let response = result.map { _ in () }
+            if let completion {
+                completion(response)
+            } else if case .failure(let error) = response {
+                NSLog("Could not refresh the Aether presence session: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    func endPresence(token: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        request(
+            path: "/api/presence",
+            method: "DELETE",
+            token: token,
+            body: PresenceBody(sessionID: presenceID(for: token))
+        ) { (result: Result<PresenceResponse, Error>) in
+            completion(result.map { _ in () })
+        }
+    }
+
+    private func presenceID(for token: String) -> String {
+        presenceLock.lock()
+        defer { presenceLock.unlock() }
+        if presenceToken != token {
+            presenceToken = token
+            presenceID = UUID().uuidString.lowercased()
+        }
+        return presenceID
+    }
+
+    func searchMessages(
+        query: String,
+        token: String,
+        completion: @escaping (Result<[MessageSearchResult], Error>) -> Void
+    ) {
+        let path = queryPath("/api/search", items: [URLQueryItem(name: "query", value: query)])
+        get(path, token: token) { (result: Result<MessageSearchResponse, Error>) in
+            completion(result.map(\.results))
+        }
+    }
+
     func createConversation(
         userID: Int64,
         token: String,
@@ -183,9 +257,14 @@ final class ChatService {
     func directMessages(
         conversationID: Int64,
         token: String,
+        beforeMessageID: Int64? = nil,
         completion: @escaping (Result<[ChatMessage], Error>) -> Void
     ) {
-        get("/api/conversations/\(conversationID)/messages?limit=50", token: token) {
+        var queryItems = [URLQueryItem(name: "limit", value: "50")]
+        if let beforeMessageID {
+            queryItems.append(URLQueryItem(name: "before", value: String(beforeMessageID)))
+        }
+        get(queryPath("/api/conversations/\(conversationID)/messages", items: queryItems), token: token) {
             (result: Result<MessagesResponse, Error>) in completion(result.map(\.messages))
         }
     }
@@ -194,13 +273,14 @@ final class ChatService {
         content: String,
         conversationID: Int64,
         token: String,
+        imageData: String? = nil,
         completion: @escaping (Result<ChatMessage, Error>) -> Void
     ) {
         request(
             path: "/api/conversations/\(conversationID)/messages",
             method: "POST",
             token: token,
-            body: ["content": content]
+            body: ChatMessageBody(content: content, imageData: imageData)
         ) { (result: Result<MessageResponse, Error>) in
             completion(result.map(\.message))
         }
@@ -607,6 +687,48 @@ private struct AvatarBody: Encodable {
     private enum CodingKeys: String, CodingKey {
         case avatar
     }
+}
+
+private struct ChatMessageBody: Encodable {
+    let content: String
+    let imageData: String?
+
+    enum CodingKeys: String, CodingKey {
+        case content
+        case imageData = "image_data"
+    }
+}
+
+private struct ReadStateBody: Encodable {
+    let scope: String
+    let roomID: String
+    let lastReadMessageID: String
+
+    enum CodingKeys: String, CodingKey {
+        case scope
+        case roomID = "room_id"
+        case lastReadMessageID = "last_read_message_id"
+    }
+}
+
+private struct ReadStateResponse: Decodable {
+    let ok: Bool
+}
+
+private struct PresenceBody: Encodable {
+    let sessionID: String
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+    }
+}
+
+private struct PresenceResponse: Decodable {
+    let ok: Bool
+}
+
+private struct MessageSearchResponse: Decodable {
+    let results: [MessageSearchResult]
 }
 
 private struct RemovedResponse: Decodable {

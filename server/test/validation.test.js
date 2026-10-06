@@ -26,6 +26,33 @@ test("trims valid messages and enforces non-empty 2000-character limit", () => {
   assert.equal([...validateMessage("é".repeat(2000)).content].length, 2000);
 });
 
+test("validates message image attachments and allows image-only messages", () => {
+  const images = [
+    ["image/png", Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])],
+    ["image/jpeg", Buffer.from([0xff, 0xd8, 0xff])],
+    ["image/webp", Buffer.from("RIFF0000WEBP")]
+  ];
+  for (const [mime, bytes] of images) {
+    const image = `data:${mime};base64,${bytes.toString("base64")}`;
+    assert.deepEqual(validateMessage("", image), { content: "", image_data: image });
+    assert.deepEqual(validateMessage(" caption ", image), { content: "caption", image_data: image });
+  }
+  const pngBytes = images[0][1];
+  const image = `data:image/png;base64,${pngBytes.toString("base64")}`;
+  assert.ok(validateMessage("", undefined).error);
+  assert.ok(validateMessage("text", "data:image/gif;base64,R0lGODlh").error);
+  assert.ok(validateMessage("", "data:image/png;base64,YWJj").error);
+  assert.ok(validateMessage("", "data:image/png;base64,Zh==").error);
+  assert.ok(validateMessage("", `data:image/webp;base64,${pngBytes.toString("base64")}`).error);
+
+  const maxPng = Buffer.alloc(512 * 1024);
+  pngBytes.copy(maxPng);
+  assert.equal(validateMessage("", `data:image/png;base64,${maxPng.toString("base64")}`).image_data.length > 0, true);
+  const oversizedPng = Buffer.alloc(512 * 1024 + 1);
+  pngBytes.copy(oversizedPng);
+  assert.ok(validateMessage("", `data:image/png;base64,${oversizedPng.toString("base64")}`).error);
+});
+
 test("parses only bounded positive integer identifiers", () => {
   assert.equal(parseId("42"), 42);
   assert.equal(parseId("0"), null);

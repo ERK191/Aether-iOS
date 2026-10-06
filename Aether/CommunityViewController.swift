@@ -1067,6 +1067,11 @@ final class CommunityViewController: UIViewController, UIImagePickerControllerDe
     private func signOut() {
         SessionStore.delete()
         ChatService.shared.disconnectWebSocket()
+        ChatService.shared.endPresence(token: token) { result in
+            if case .failure(let error) = result {
+                NSLog("Could not end the Aether presence session: %@", error.localizedDescription)
+            }
+        }
         guard let appDelegate = UIApplication.shared.delegate as? AppDelegate else {
             showNotice(AetherLanguage.string("Could not sign out. Please restart the app and try again."))
             return
@@ -1146,8 +1151,18 @@ enum AetherLanguage {
         "Community channel": "Canalul comunității",
         "Community chat": "Chatul comunității",
         "Search chats": "Caută conversații",
+        "Search chats and messages": "Caută conversații și mesaje",
         "New message": "Mesaj nou",
+        "MESSAGE RESULTS": "REZULTATE ÎN MESAJE",
+        "Online": "Online",
+        "Last seen": "Văzut ultima dată",
+        "Photo": "Fotografie",
+        "Photo message": "Fotografie trimisă",
+        "Send a photo": "Trimite o fotografie",
+        "Photo library is not available on this device.": "Biblioteca foto nu este disponibilă pe acest dispozitiv.",
+        "No matching messages.": "Nu există mesaje potrivite.",
         "No chats yet. Find a friend and say hello.": "Nu ai conversații. Găsește un prieten și salută-l.",
+        "No matching conversations.": "Nu există conversații potrivite.",
         "Start a conversation": "Începe o conversație",
         "Yesterday": "Ieri",
         "Back to chats": "Înapoi la conversații",

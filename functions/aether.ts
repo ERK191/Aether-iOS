@@ -10,13 +10,13 @@ import {
   validateCredentials,
   validateMessage,
   type ValidAvatar,
-  type ValidCredentials,
-  type ValidMessage
+  type ValidCredentials
 } from "../server/validation.mjs";
 import { canReceiveRealtimeEvent, type RealtimeAudience } from "../server/realtime.mjs";
 
 type PublicUser = { id: string; username: string; avatar?: string | null; is_owner: boolean };
 type AuthUser = { id: string; username: string; isOwner: boolean };
+type ValidChatMessage = { content: string; image_data?: string };
 type Variables = { user: AuthUser };
 type AppEnvironment = { Variables: Variables };
 type SocketEvent = {
@@ -59,9 +59,17 @@ function credentials(value: unknown): ValidCredentials | null {
   return "error" in result ? null : result;
 }
 
-function validatedMessage(value: unknown): ValidMessage | null {
+function parseSessionId(value: unknown): string | null {
+  if (typeof value !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+    return null;
+  }
+  return value.toLowerCase();
+}
+
+function validatedMessage(value: unknown): ValidChatMessage | null {
   const source = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
-  const result = validateMessage(source.content);
+  const result = validateMessage(source.content, source.image_data);
   return "error" in result ? null : result;
 }
 
@@ -110,6 +118,7 @@ async function ensureSchema(): Promise<void> {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
       ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN NOT NULL DEFAULT FALSE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS ban_reason TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS is_test_account BOOLEAN NOT NULL DEFAULT FALSE;
@@ -139,6 +148,7 @@ async function ensureSchema(): Promise<void> {
         content VARCHAR(2000) NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_data TEXT;
       CREATE INDEX IF NOT EXISTS messages_channel_id_id_idx ON messages (channel_id, id DESC);
       CREATE TABLE IF NOT EXISTS auth_rate_limits (
         username_key VARCHAR(24) PRIMARY KEY,
@@ -188,8 +198,23 @@ async function ensureSchema(): Promise<void> {
         content VARCHAR(2000) NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS image_data TEXT;
       CREATE INDEX IF NOT EXISTS direct_messages_conversation_id_id_idx
         ON direct_messages (conversation_id, id DESC);
+      CREATE TABLE IF NOT EXISTS read_state (
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        scope VARCHAR(8) NOT NULL CHECK (scope IN ('channel', 'direct')),
+        room_id BIGINT NOT NULL,
+        last_read_message_id BIGINT NOT NULL,
+        PRIMARY KEY (user_id, scope, room_id)
+      );
+      CREATE TABLE IF NOT EXISTS presence_sessions (
+        session_id UUID PRIMARY KEY,
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS presence_sessions_user_last_seen_idx
+        ON presence_sessions (user_id, last_seen_at DESC);
       INSERT INTO channels (name, description, position) VALUES
         ('general', 'Chat with everyone in the community.', 1),
         ('gaming', 'Talk games, teams, and what you are playing.', 2),
@@ -302,7 +327,8 @@ async function pollMessages(): Promise<void> {
     if (sockets.size === 0) return;
 
     const result = await pool.query(
-      `SELECT m.id, m.channel_id, m.user_id, u.username, u.avatar_data AS avatar, m.content, m.created_at,
+      `SELECT m.id, m.channel_id, m.user_id, u.username, u.avatar_data AS avatar,
+              m.content, m.image_data, m.created_at,
               c.server_id, recipients.member_ids
        FROM messages m
        JOIN users u ON u.id = m.user_id
@@ -812,16 +838,41 @@ app.get("/api/conversations", requireAuth, async (context) => {
   const result = await pool.query(
     `SELECT dc.id, dc.created_at,
             u.id AS other_id, u.username AS other_username, u.avatar_data AS other_avatar,
+            COALESCE(presence.is_online, FALSE) AS other_online,
+            CASE
+              WHEN presence.last_session_seen IS NULL AND u.last_seen_at IS NULL THEN NULL
+              ELSE GREATEST(
+                COALESCE(presence.last_session_seen, '-infinity'::timestamptz),
+                COALESCE(u.last_seen_at, '-infinity'::timestamptz)
+              )
+            END AS other_last_seen_at,
             dm.id AS message_id, dm.content AS message_content, dm.user_id AS message_user_id,
-            dm.created_at AS message_created_at
+            dm.created_at AS message_created_at,
+            dm.image_available AS message_image_available,
+            unread.unread_count
      FROM direct_conversations dc
      JOIN users u ON u.id = CASE WHEN dc.participant_low_id = $1 THEN dc.participant_high_id ELSE dc.participant_low_id END
      LEFT JOIN LATERAL (
-       SELECT id, content, user_id, created_at
+       SELECT id, content, user_id, created_at, image_data IS NOT NULL AS image_available
        FROM direct_messages
        WHERE conversation_id = dc.id
        ORDER BY id DESC LIMIT 1
      ) dm ON true
+     LEFT JOIN LATERAL (
+       SELECT MAX(last_seen_at) AS last_session_seen,
+              bool_or(last_seen_at > now() - interval '90 seconds') AS is_online
+       FROM presence_sessions
+       WHERE user_id = u.id
+     ) presence ON true
+     LEFT JOIN LATERAL (
+       SELECT count(*)::integer AS unread_count
+       FROM direct_messages unread_message
+       LEFT JOIN read_state marker
+         ON marker.user_id = $1 AND marker.scope = 'direct' AND marker.room_id = dc.id
+       WHERE unread_message.conversation_id = dc.id
+         AND unread_message.user_id <> $1
+         AND unread_message.id > COALESCE(marker.last_read_message_id, 0)
+     ) unread ON true
      WHERE dc.participant_low_id = $1 OR dc.participant_high_id = $1
      ORDER BY COALESCE(dm.id, 0) DESC, dc.id DESC`,
     [user.id]
@@ -829,13 +880,21 @@ app.get("/api/conversations", requireAuth, async (context) => {
   return context.json({
     conversations: result.rows.map((row) => ({
       id: String(row.id),
-      user: { id: String(row.other_id), username: row.other_username, avatar: row.other_avatar ?? null },
+      user: {
+        id: String(row.other_id),
+        username: row.other_username,
+        avatar: row.other_avatar ?? null,
+        online: row.other_online,
+        last_seen_at: row.other_last_seen_at
+      },
       created_at: row.created_at,
+      unread_count: row.unread_count,
       last_message: row.message_id === null ? null : {
         id: String(row.message_id),
         user_id: String(row.message_user_id),
         content: row.message_content,
-        created_at: row.message_created_at
+        created_at: row.message_created_at,
+        image_available: row.message_image_available
       }
     }))
   });
@@ -886,7 +945,7 @@ app.get("/api/conversations/:conversationId/messages", requireAuth, async (conte
   if (rawBefore !== undefined && before === null) return jsonError("Invalid message cursor.", 400);
   const result = await pool.query(
     `SELECT dm.id, dm.conversation_id, dm.user_id, u.username, u.avatar_data AS avatar,
-            dm.content, dm.created_at
+            dm.content, dm.image_data, dm.created_at
      FROM direct_messages dm JOIN users u ON u.id = dm.user_id
      WHERE dm.conversation_id = $1 AND ($2::bigint IS NULL OR dm.id < $2)
      ORDER BY dm.id DESC LIMIT $3`,
@@ -918,12 +977,170 @@ app.post("/api/conversations/:conversationId/messages", requireAuth, async (cont
     return jsonError("You're sending messages too quickly. Try again in a minute.", 429);
   }
   const result = await pool.query(
-    `INSERT INTO direct_messages (conversation_id, user_id, content)
-     VALUES ($1, $2, $3)
-     RETURNING id, conversation_id, user_id, content, created_at`,
-    [conversationId, user.id, message.content]
+    `INSERT INTO direct_messages (conversation_id, user_id, content, image_data)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, conversation_id, user_id, content, image_data, created_at`,
+    [conversationId, user.id, message.content, message.image_data ?? null]
   );
   return context.json({ message: { ...result.rows[0], id: String(result.rows[0].id), conversation_id: String(result.rows[0].conversation_id), user_id: user.id, username: user.username } }, 201);
+});
+
+app.post("/api/read-state", requireAuth, async (context) => {
+  await ensureSchema();
+  let body: unknown;
+  try {
+    body = await context.req.json();
+  } catch {
+    return jsonError("Send valid JSON with a read scope, room, and message.", 400);
+  }
+  const source = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const scope = source.scope;
+  const roomId = typeof source.room_id === "string" ? parseId(source.room_id) : null;
+  const messageId = typeof source.last_read_message_id === "string"
+    ? parseId(source.last_read_message_id)
+    : null;
+  if ((scope !== "channel" && scope !== "direct") || roomId === null || messageId === null) {
+    return jsonError("Read state requires a valid scope, room_id, and last_read_message_id.", 400);
+  }
+
+  const user = context.get("user");
+  if (scope === "channel") {
+    const channel = await pool.query("SELECT id, server_id FROM channels WHERE id = $1", [roomId]);
+    if (!channel.rows[0]) return jsonError("Channel not found.", 404);
+    if (channel.rows[0].server_id !== null) {
+      const membership = await pool.query(
+        "SELECT 1 FROM server_memberships WHERE server_id = $1 AND user_id = $2",
+        [channel.rows[0].server_id, user.id]
+      );
+      if (!membership.rows[0]) return jsonError("Join this server to update its read state.", 403);
+    }
+    const markerMessage = await pool.query(
+      "SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2",
+      [messageId, roomId]
+    );
+    if (!markerMessage.rows[0]) return jsonError("Message not found in this channel.", 404);
+  } else {
+    const conversation = await pool.query(
+      `SELECT id FROM direct_conversations
+       WHERE id = $1 AND (participant_low_id = $2 OR participant_high_id = $2)`,
+      [roomId, user.id]
+    );
+    if (!conversation.rows[0]) return jsonError("Conversation not found.", 404);
+    const markerMessage = await pool.query(
+      "SELECT 1 FROM direct_messages WHERE id = $1 AND conversation_id = $2",
+      [messageId, roomId]
+    );
+    if (!markerMessage.rows[0]) return jsonError("Message not found in this conversation.", 404);
+  }
+
+  await pool.query(
+    `INSERT INTO read_state (user_id, scope, room_id, last_read_message_id)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id, scope, room_id) DO UPDATE SET
+       last_read_message_id = GREATEST(read_state.last_read_message_id, EXCLUDED.last_read_message_id)`,
+    [user.id, scope, roomId, messageId]
+  );
+  return context.json({ ok: true });
+});
+
+app.post("/api/presence/heartbeat", requireAuth, async (context) => {
+  await ensureSchema();
+  let body: unknown;
+  try {
+    body = await context.req.json();
+  } catch {
+    return jsonError("Send valid JSON with a session_id UUID.", 400);
+  }
+  const source = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const sessionId = parseSessionId(source.session_id);
+  if (!sessionId) return jsonError("Send a valid session_id UUID.", 400);
+  const user = context.get("user");
+  const result = await pool.query(
+    `INSERT INTO presence_sessions (session_id, user_id, last_seen_at)
+     VALUES ($1, $2, clock_timestamp())
+     ON CONFLICT (session_id) DO UPDATE SET last_seen_at = clock_timestamp()
+       WHERE presence_sessions.user_id = EXCLUDED.user_id
+     RETURNING session_id`,
+    [sessionId, user.id]
+  );
+  if (!result.rows[0]) return jsonError("That presence session belongs to another account.", 409);
+  return context.json({ ok: true });
+});
+
+app.delete("/api/presence", requireAuth, async (context) => {
+  await ensureSchema();
+  let body: unknown;
+  try {
+    body = await context.req.json();
+  } catch {
+    return jsonError("Send valid JSON with a session_id UUID.", 400);
+  }
+  const source = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const sessionId = parseSessionId(source.session_id);
+  if (!sessionId) return jsonError("Send a valid session_id UUID.", 400);
+  const user = context.get("user");
+  const removed = await pool.query(
+    "DELETE FROM presence_sessions WHERE session_id = $1 AND user_id = $2 RETURNING user_id",
+    [sessionId, user.id]
+  );
+  if (removed.rows[0]) {
+    await pool.query(
+      `UPDATE users SET last_seen_at = clock_timestamp()
+       WHERE id = $1 AND NOT EXISTS (
+         SELECT 1 FROM presence_sessions
+         WHERE user_id = $1 AND last_seen_at > clock_timestamp() - interval '90 seconds'
+       )`,
+      [user.id]
+    );
+  }
+  return context.json({ ok: true });
+});
+
+app.get("/api/search", requireAuth, async (context) => {
+  await ensureSchema();
+  const query = (context.req.query("query") ?? "").trim();
+  if ([...query].length < 2 || [...query].length > 80) {
+    return jsonError("Search query must contain 2–80 characters.", 400);
+  }
+  const user = context.get("user");
+  const escapedQuery = query.replace(/[\\%_]/g, "\\$&");
+  const result = await pool.query(
+    `SELECT scope, room_id::text AS room_id, message_id::text AS message_id,
+            title, username, content, image_available, created_at, server_id, channel_name
+     FROM (
+       SELECT 'channel'::text AS scope, c.id AS room_id, m.id AS message_id,
+              c.name::text AS title, u.username, m.content,
+              (m.image_data IS NOT NULL) AS image_available, m.created_at,
+              c.server_id::text AS server_id,
+              CASE WHEN c.server_id IS NULL THEN NULL ELSE c.name END AS channel_name
+       FROM messages m
+       JOIN channels c ON c.id = m.channel_id
+       JOIN users u ON u.id = m.user_id
+       WHERE m.content ILIKE $2 ESCAPE E'\\\\'
+         AND (c.server_id IS NULL OR EXISTS (
+           SELECT 1 FROM server_memberships sm
+           WHERE sm.server_id = c.server_id AND sm.user_id = $1
+         ))
+       UNION ALL
+       SELECT 'direct'::text AS scope, dc.id AS room_id, dm.id AS message_id,
+              other_user.username::text AS title, sender.username, dm.content,
+              (dm.image_data IS NOT NULL) AS image_available, dm.created_at,
+              NULL::text AS server_id, NULL::text AS channel_name
+       FROM direct_messages dm
+       JOIN direct_conversations dc ON dc.id = dm.conversation_id
+       JOIN users sender ON sender.id = dm.user_id
+       JOIN users other_user ON other_user.id = CASE
+         WHEN dc.participant_low_id = $1 THEN dc.participant_high_id
+         ELSE dc.participant_low_id
+       END
+       WHERE dm.content ILIKE $2 ESCAPE E'\\\\'
+         AND (dc.participant_low_id = $1 OR dc.participant_high_id = $1)
+     ) matches
+     ORDER BY matches.created_at DESC, matches.message_id DESC
+     LIMIT 50`,
+    [user.id, `%${escapedQuery}%`]
+  );
+  return context.json({ results: result.rows });
 });
 
 app.get("/api/servers", requireAuth, async (context) => {
@@ -1050,19 +1267,36 @@ app.get("/api/servers/:serverId/channels", requireAuth, async (context) => {
   const membership = await pool.query("SELECT 1 FROM server_memberships WHERE server_id = $1 AND user_id = $2", [serverId, user.id]);
   if (!membership.rows[0]) return jsonError("Join this server to view its channels.", 403);
   const result = await pool.query(
-    "SELECT id, server_id, name, description, position FROM channels WHERE server_id = $1 ORDER BY position, id",
-    [serverId]
+    `SELECT c.id, c.server_id, c.name, c.description, c.position,
+            (SELECT count(*)::integer
+             FROM messages m
+             LEFT JOIN read_state marker
+               ON marker.user_id = $2 AND marker.scope = 'channel' AND marker.room_id = c.id
+             WHERE m.channel_id = c.id AND m.user_id <> $2
+               AND m.id > COALESCE(marker.last_read_message_id, 0)) AS unread_count
+     FROM channels c
+     WHERE c.server_id = $1
+     ORDER BY c.position, c.id`,
+    [serverId, user.id]
   );
   return context.json({ channels: result.rows.map((row) => ({ ...row, id: String(row.id), server_id: String(row.server_id) })) });
 });
 
 app.get("/api/channels", requireAuth, async (context) => {
   await ensureSchema();
+  const user = context.get("user");
   const result = await pool.query(
     `SELECT c.id, c.name, c.description,
-            (SELECT count(*)::integer FROM users) AS member_count
+            (SELECT count(*)::integer FROM users) AS member_count,
+            (SELECT count(*)::integer
+             FROM messages m
+             LEFT JOIN read_state marker
+               ON marker.user_id = $1 AND marker.scope = 'channel' AND marker.room_id = c.id
+             WHERE m.channel_id = c.id AND m.user_id <> $1
+               AND m.id > COALESCE(marker.last_read_message_id, 0)) AS unread_count
      FROM channels c WHERE c.server_id IS NULL
-     ORDER BY c.position, c.id`
+     ORDER BY c.position, c.id`,
+    [user.id]
   );
   return context.json({ channels: result.rows });
 });
@@ -1089,7 +1323,8 @@ app.get("/api/channels/:channelId/messages", requireAuth, async (context) => {
     if (!membership.rows[0]) return jsonError("Join this server to view its messages.", 403);
   }
   const result = await pool.query(
-    `SELECT m.id, m.channel_id, m.user_id, u.username, u.avatar_data AS avatar, m.content, m.created_at
+    `SELECT m.id, m.channel_id, m.user_id, u.username, u.avatar_data AS avatar,
+            m.content, m.image_data, m.created_at
      FROM messages m
      JOIN users u ON u.id = m.user_id
      WHERE m.channel_id = $1 AND ($2::bigint IS NULL OR m.id < $2)
@@ -1130,13 +1365,13 @@ app.post("/api/channels/:channelId/messages", requireAuth, async (context) => {
   }
   const result = await pool.query(
     `WITH inserted AS (
-       INSERT INTO messages (channel_id, user_id, content)
-       VALUES ($1, $2, $3)
-       RETURNING id, channel_id, user_id, content, created_at
+       INSERT INTO messages (channel_id, user_id, content, image_data)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, channel_id, user_id, content, image_data, created_at
      )
      SELECT inserted.*, u.username, u.avatar_data AS avatar
      FROM inserted JOIN users u ON u.id = inserted.user_id`,
-    [channelId, user.id, message.content]
+    [channelId, user.id, message.content, message.image_data ?? null]
   );
   const savedMessage = result.rows[0];
   return context.json({ message: savedMessage }, 201);

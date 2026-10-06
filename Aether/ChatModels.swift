@@ -109,16 +109,32 @@ struct DirectConversation: Decodable {
     let id: Int64
     let user: ChatUser
     let createdAt: Date
+    let lastMessage: DirectMessagePreview?
 
     enum CodingKeys: String, CodingKey {
         case id, user
         case createdAt = "created_at"
+        case lastMessage = "last_message"
     }
 
-    init(id: Int64, user: ChatUser, createdAt: Date = Date()) {
+    init(id: Int64, user: ChatUser, createdAt: Date = Date(), lastMessage: DirectMessagePreview? = nil) {
         self.id = id
         self.user = user
         self.createdAt = createdAt
+        self.lastMessage = lastMessage
+    }
+}
+
+struct DirectMessagePreview: Decodable {
+    let id: Int64
+    let userID: Int64
+    let content: String
+    let createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id, content
+        case userID = "user_id"
+        case createdAt = "created_at"
     }
 }
 

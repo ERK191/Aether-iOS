@@ -277,7 +277,7 @@ final class AuthViewController: UIViewController {
     }
 
     private func openChat(user: ChatUser, token: String) {
-        let chat = ChatViewController(user: user, token: token)
-        navigationController?.setViewControllers([chat], animated: true)
+        let home = MainTabBarController(user: user, token: token)
+        navigationController?.setViewControllers([home], animated: true)
     }
 }

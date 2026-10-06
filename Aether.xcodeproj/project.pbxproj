@@ -13,6 +13,7 @@
 		A10000000000000000000006 /* ChatViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* ChatViewController.swift */; };
 		A10000000000000000000007 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* Assets.xcassets */; };
 		A10000000000000000000008 /* CommunityViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* CommunityViewController.swift */; };
+		A10000000000000000000009 /* MainTabBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* MainTabBarController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -26,6 +27,7 @@
 		B10000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10000000000000000000009 /* Aether.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Aether.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10000000000000000000010 /* CommunityViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityViewController.swift; sourceTree = "<group>"; };
+		B10000000000000000000011 /* MainTabBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabBarController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -53,6 +55,7 @@
 				B10000000000000000000005 /* AuthViewController.swift */,
 				B10000000000000000000006 /* ChatViewController.swift */,
 				B10000000000000000000010 /* CommunityViewController.swift */,
+				B10000000000000000000011 /* MainTabBarController.swift */,
 				B10000000000000000000007 /* Assets.xcassets */,
 				B10000000000000000000008 /* Info.plist */,
 			);
@@ -123,6 +126,7 @@
 				A10000000000000000000005 /* AuthViewController.swift in Sources */,
 				A10000000000000000000006 /* ChatViewController.swift in Sources */,
 				A10000000000000000000008 /* CommunityViewController.swift in Sources */,
+				A10000000000000000000009 /* MainTabBarController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -5,17 +5,17 @@ enum AppConfiguration {
 }
 
 enum AetherTheme {
-    static let background = UIColor(red: 0.043, green: 0.051, blue: 0.082, alpha: 1)
-    static let panel = UIColor(red: 0.078, green: 0.090, blue: 0.133, alpha: 1)
-    static let elevated = UIColor(red: 0.118, green: 0.137, blue: 0.196, alpha: 1)
-    static let accent = UIColor(red: 0.47, green: 0.38, blue: 0.98, alpha: 1)
-    static let accentSoft = UIColor(red: 0.25, green: 0.20, blue: 0.52, alpha: 1)
-    static let cyan = UIColor(red: 0.36, green: 0.88, blue: 0.83, alpha: 1)
-    static let border = UIColor(red: 0.22, green: 0.25, blue: 0.34, alpha: 1)
-    static let text = UIColor(red: 0.95, green: 0.96, blue: 0.99, alpha: 1)
-    static let secondary = UIColor(red: 0.68, green: 0.72, blue: 0.81, alpha: 1)
-    static let muted = UIColor(red: 0.45, green: 0.50, blue: 0.60, alpha: 1)
-    static let danger = UIColor(red: 1, green: 0.40, blue: 0.43, alpha: 1)
+    static let background = UIColor(red: 0.97, green: 0.97, blue: 0.95, alpha: 1)
+    static let panel = UIColor(red: 1, green: 1, blue: 1, alpha: 1)
+    static let elevated = UIColor(red: 0.93, green: 0.95, blue: 0.93, alpha: 1)
+    static let accent = UIColor(red: 0.04, green: 0.48, blue: 0.39, alpha: 1)
+    static let accentSoft = UIColor(red: 0.85, green: 0.95, blue: 0.89, alpha: 1)
+    static let cyan = UIColor(red: 0.08, green: 0.54, blue: 0.45, alpha: 1)
+    static let border = UIColor(red: 0.87, green: 0.89, blue: 0.87, alpha: 1)
+    static let text = UIColor(red: 0.10, green: 0.14, blue: 0.13, alpha: 1)
+    static let secondary = UIColor(red: 0.39, green: 0.44, blue: 0.42, alpha: 1)
+    static let muted = UIColor(red: 0.55, green: 0.60, blue: 0.57, alpha: 1)
+    static let danger = UIColor(red: 0.78, green: 0.19, blue: 0.21, alpha: 1)
 
     static func rounded(_ view: UIView, radius: CGFloat = 14) {
         view.layer.cornerRadius = radius
